@@ -7,10 +7,10 @@ plugins {
 val requestedVersionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 3
 val requestedVersionName = providers.gradleProperty("versionName").orNull ?: "2.1.0"
 val keyStorePath = System.getenv("KEYSTORE_PATH")
-val storePassword = System.getenv("STORE_PASSWORD")
-val keyAlias = System.getenv("KEY_ALIAS")
-val keyPassword = System.getenv("KEY_PASSWORD")
-val hasReleaseKey = listOf(keyStorePath, storePassword, keyAlias, keyPassword).all { !it.isNullOrBlank() }
+val releaseStorePassword = System.getenv("STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("KEY_ALIAS")
+val releaseKeyPassword = System.getenv("KEY_PASSWORD")
+val hasReleaseKey = listOf(keyStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
 
 android {
     namespace = "com.example"
@@ -30,9 +30,9 @@ android {
         signingConfigs {
             create("release") {
                 storeFile = file(keyStorePath!!)
-                this.storePassword = storePassword
-                this.keyAlias = keyAlias
-                this.keyPassword = keyPassword
+                this.storePassword = releaseStorePassword
+                this.keyAlias = releaseKeyAlias
+                this.keyPassword = releaseKeyPassword
             }
         }
     }
