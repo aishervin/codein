@@ -91,7 +91,7 @@ fun CodeinSettingsSheet(
                 Column(Modifier.padding(16.dp)) {
                     Text("☬Exclusive SHΞN™ made", color = NeonOrange, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
-                    Text("SHΞN™ Coder  •  Codein", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    Text("CODΞiN™  •  SHΞN", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                     Text("Developer: SHΞN™", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }
             }
