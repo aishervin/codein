@@ -19,6 +19,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
@@ -86,6 +87,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
@@ -424,6 +426,21 @@ fun MainScreen() {
                                 )
                             }
                         }
+                        val historyFade = MaterialTheme.colorScheme.background
+                        Box(
+                            Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth()
+                                .height(24.dp)
+                                .background(Brush.verticalGradient(listOf(historyFade, historyFade.copy(alpha = 0f))))
+                        )
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(24.dp)
+                                .background(Brush.verticalGradient(listOf(historyFade.copy(alpha = 0f), historyFade)))
+                        )
                         }
                     }
                     }
@@ -599,15 +616,45 @@ private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel)
             },
             label = "model-suffix"
         ) { suffix ->
-            Text(
-                suffix,
-                color = NeonOrange,
-                fontFamily = FontFamily.SansSerif,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
+            ModelSuffixText(suffix)
+        }
+        Spacer(Modifier.width(3.dp))
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceEvenly,
+            modifier = Modifier.height(16.dp)
+        ) {
+            Text("ᨈ", color = TextMuted.copy(alpha = .55f), fontSize = 7.sp, lineHeight = 7.sp)
+            Text("ᨆ", color = TextMuted.copy(alpha = .55f), fontSize = 7.sp, lineHeight = 7.sp)
         }
     }
+}
+
+@Composable
+private fun ModelSuffixText(suffix: String) {
+    val alpha = remember { Animatable(1f) }
+    val jitter = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(2400)
+            jitter.animateTo(-.7f, tween(45))
+            alpha.animateTo(.62f, tween(45))
+            jitter.animateTo(.7f, tween(45))
+            alpha.animateTo(1f, tween(90))
+            jitter.animateTo(0f, tween(45))
+            delay(120)
+            alpha.animateTo(.82f, tween(40))
+            alpha.animateTo(1f, tween(100))
+        }
+    }
+    Text(
+        suffix,
+        color = NeonOrange.copy(alpha = alpha.value),
+        fontFamily = FontFamily.SansSerif,
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.graphicsLayer { translationX = jitter.value }
+    )
 }
 
 @Composable
