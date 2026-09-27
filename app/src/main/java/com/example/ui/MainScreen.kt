@@ -903,9 +903,13 @@ private fun Composer(
                             ) {
                                 if (value.isEmpty()) {
                                     Text(
-                                        if (attachmentName == null) "Write a message..." else "Optional text with attachment",
-                                        color = TextMuted,
-                                        fontSize = 14.sp,
+                                        if (attachmentName == null) "Ask me some illegal thing...!" else "Optional text with attachment",
+                                        style = TextStyle(
+                                            color = TextMuted,
+                                            fontSize = 14.sp,
+                                            textDirection = TextDirection.Ltr,
+                                            shadow = SoftTextShadow
+                                        ),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         textAlign = TextAlign.End,
