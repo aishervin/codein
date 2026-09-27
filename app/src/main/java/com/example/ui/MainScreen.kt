@@ -665,12 +665,14 @@ private fun SilverText(
     letterSpacing: TextUnit = 0.sp,
     modifier: Modifier = Modifier,
     colors: List<Color> = listOf(
-        Color(0xFF090A0C),
-        Color(0xFF69717B),
+        Color(0xFF20252B),
+        Color(0xFF59636D),
+        Color(0xFFAEB5BC),
         Color.White,
-        Color(0xFF363D46),
+        Color(0xFF5A636E),
         Color(0xFFD3D7DC),
-        Color(0xFF0A0B0D)
+        Color(0xFF727C86),
+        Color(0xFF24292F)
     ),
     durationMillis: Int = 5200
 ) {
