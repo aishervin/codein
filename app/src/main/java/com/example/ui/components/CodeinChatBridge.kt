@@ -9,12 +9,16 @@ class CodeinChatBridge {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     var onStarted: () -> Unit = {}
+    var onConnection: (Boolean) -> Unit = {}
     var onToken: (String) -> Unit = {}
     var onFinished: () -> Unit = {}
     var onError: (String) -> Unit = {}
 
     @JavascriptInterface
     fun started() = mainHandler.post { onStarted() }
+
+    @JavascriptInterface
+    fun connection(value: String) = mainHandler.post { onConnection(value == "true") }
 
     @JavascriptInterface
     fun token(value: String) = mainHandler.post { onToken(value) }

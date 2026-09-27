@@ -3,13 +3,12 @@ package com.example.ui
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,7 +20,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -67,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -107,6 +109,7 @@ fun MainScreen() {
     val listState = rememberLazyListState()
     var webView by remember { mutableStateOf<WebView?>(null) }
     var isConnected by remember { mutableStateOf(false) }
+    var connectionFailed by remember { mutableStateOf(false) }
     var isStreaming by remember { mutableStateOf(false) }
     var activeAnswer by remember { mutableStateOf("") }
     var input by remember { mutableStateOf("") }
@@ -150,6 +153,10 @@ fun MainScreen() {
     }
 
     bridge.onStarted = { isStreaming = true }
+    bridge.onConnection = { connected ->
+        isConnected = connected
+        if (connected) connectionFailed = false
+    }
     bridge.onToken = { activeAnswer += it }
     bridge.onFinished = {
         if (activeAnswer.isNotBlank()) messages.add(ChatMessage(user = false, text = activeAnswer))
@@ -180,7 +187,6 @@ fun MainScreen() {
                             webView = this
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
-                            settings.databaseEnabled = true
                             settings.cacheMode = WebSettings.LOAD_DEFAULT
                             settings.userAgentString = WebSettings.getDefaultUserAgent(ctx).replace("; wv", "")
                             CookieManager.getInstance().setAcceptCookie(true)
@@ -188,10 +194,37 @@ fun MainScreen() {
                             addJavascriptInterface(bridge, "CodeinBridge")
                             webChromeClient = WebChromeClient()
                             webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                    isConnected = false
+                                    connectionFailed = false
+                                }
+
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     view?.evaluateJavascript(CODEIN_JS_BRIDGE, null)
-                                    view?.evaluateJavascript("document.querySelector('textarea') !== null") { result ->
-                                        isConnected = result == "true"
+                                    fun probeConnection(attempt: Int) {
+                                        val target = view ?: return
+                                        target.evaluateJavascript(CODEIN_CONNECTION_PROBE, null)
+                                        if (attempt < 20) {
+                                            target.postDelayed({
+                                                if (!isConnected) probeConnection(attempt + 1)
+                                            }, 400L)
+                                        } else {
+                                            target.postDelayed({
+                                                if (!isConnected) connectionFailed = true
+                                            }, 500L)
+                                        }
+                                    }
+                                    probeConnection(0)
+                                }
+
+                                override fun onReceivedError(
+                                    view: WebView?,
+                                    request: WebResourceRequest?,
+                                    error: WebResourceError?
+                                ) {
+                                    if (request?.isForMainFrame == true) {
+                                        isConnected = false
+                                        connectionFailed = true
                                     }
                                 }
 
@@ -208,7 +241,7 @@ fun MainScreen() {
                     },
                     update = { webView = it }
                 )
-                Column(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize().statusBarsPadding()) {
                     CodeinHeader(
                         selectedModel = selectedModel,
                         showModelMenu = showModelMenu,
@@ -217,7 +250,13 @@ fun MainScreen() {
                         onNewChat = ::clearChat,
                         onPromptStudio = { showPromptStudio = true },
                         onSettings = { showSettings = true },
-                        isConnected = isConnected
+                        isConnected = isConnected,
+                        connectionFailed = connectionFailed,
+                        onRetry = {
+                            connectionFailed = false
+                            isConnected = false
+                            webView?.reload()
+                        }
                     )
                     if (messages.isEmpty() && activeAnswer.isEmpty()) {
                         EmptyState(
@@ -241,7 +280,8 @@ fun MainScreen() {
                         value = input,
                         onValueChange = { input = it },
                         onSend = ::sendMessage,
-                        enabled = isConnected && !isStreaming
+                        enabled = isConnected && !isStreaming,
+                        modifier = Modifier.navigationBarsPadding()
                     )
                 }
 
@@ -266,6 +306,7 @@ fun MainScreen() {
                 WebStorage.getInstance().deleteAllData()
                 webView?.clearCache(true)
                 isConnected = false
+                connectionFailed = false
                 webView?.reload()
             },
             isConnected = isConnected
@@ -286,62 +327,66 @@ private fun CodeinHeader(
     onNewChat: () -> Unit,
     onPromptStudio: () -> Unit,
     onSettings: () -> Unit,
-    isConnected: Boolean
+    isConnected: Boolean,
+    connectionFailed: Boolean,
+    onRetry: () -> Unit
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 8.dp,
-        modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline)
-    ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Surface(shape = RoundedCornerShape(14.dp), color = Color.Black, modifier = Modifier.size(46.dp)) {
-                    androidx.compose.foundation.Image(
-                        painter = painterResource(R.drawable.shen_logo),
-                        contentDescription = "SHΞN™ Coder",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.padding(5.dp)
-                    )
-                }
-                Spacer(Modifier.width(11.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("SHΞN™ Coder", fontWeight = FontWeight.ExtraBold, fontSize = 19.sp)
-                    Text(
-                        if (isConnected) "Codein  •  آماده گفتگو" else "Codein  •  در حال اتصال",
-                        color = if (isConnected) NeonOrange else TextMuted,
-                        fontSize = 11.sp
-                    )
-                }
-                IconButton(onClick = onNewChat) { Icon(Icons.Default.Add, "گفتگوی جدید", tint = NeonOrange) }
-                IconButton(onClick = onPromptStudio) { Icon(Icons.Default.AutoAwesome, "استودیو پرامپت", tint = NeonOrange) }
-                IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "تنظیمات", tint = NeonOrange) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            androidx.compose.foundation.Image(
+                painter = painterResource(R.drawable.shen_logo),
+                contentDescription = "SHΞN™ Coder",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(52.dp)
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("SHΞN™ Coder", fontWeight = FontWeight.ExtraBold, fontSize = 19.sp)
+                Text(
+                    when {
+                        isConnected -> "Codein  •  آماده گفتگو"
+                        connectionFailed -> "Codein  •  تلاش دوباره"
+                        else -> "Codein  •  در حال اتصال"
+                    },
+                    color = when {
+                        isConnected -> NeonOrange
+                        connectionFailed -> NeonOrangeSoft
+                        else -> TextMuted
+                    },
+                    fontSize = 11.sp,
+                    modifier = Modifier.clickable(enabled = connectionFailed, onClick = onRetry)
+                )
             }
-            Spacer(Modifier.height(10.dp))
-            Box {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth().clickable { onModelMenuChange(true) }
+            IconButton(onClick = onNewChat) { Icon(Icons.Default.Add, "گفتگوی جدید", tint = NeonOrange) }
+            IconButton(onClick = onPromptStudio) { Icon(Icons.Default.AutoAwesome, "استودیو پرامپت", tint = NeonOrange) }
+            IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "تنظیمات", tint = NeonOrange) }
+        }
+        Spacer(Modifier.height(10.dp))
+        Box {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(18.dp),
+                shadowElevation = 10.dp,
+                modifier = Modifier.fillMaxWidth().clickable { onModelMenuChange(true) }
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp).fillMaxWidth()
                 ) {
-                    Row(
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp).fillMaxWidth()
-                    ) {
-                        Column {
-                            Text(selectedModel.label, color = NeonOrange, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(selectedModel.description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-                        }
-                        Icon(Icons.Default.MoreVert, contentDescription = "انتخاب مدل", tint = NeonOrange)
+                    Column {
+                        Text(selectedModel.label, color = NeonOrange, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(selectedModel.description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                     }
+                    Icon(Icons.Default.MoreVert, contentDescription = "انتخاب مدل", tint = NeonOrange)
                 }
-                DropdownMenu(expanded = showModelMenu, onDismissRequest = { onModelMenuChange(false) }) {
-                    codeinModels.forEach { model ->
-                        DropdownMenuItem(
-                            text = { Column { Text(model.label, fontWeight = FontWeight.Bold); Text(model.description, fontSize = 11.sp) } },
-                            onClick = { onSelectModel(model) }
-                        )
-                    }
+            }
+            DropdownMenu(expanded = showModelMenu, onDismissRequest = { onModelMenuChange(false) }) {
+                codeinModels.forEach { model ->
+                    DropdownMenuItem(
+                        text = { Column { Text(model.label, fontWeight = FontWeight.Bold); Text(model.description, fontSize = 11.sp) } },
+                        onClick = { onSelectModel(model) }
+                    )
                 }
             }
         }
@@ -355,14 +400,12 @@ private fun EmptyState(modifier: Modifier, onSuggestion: (String) -> Unit) {
         verticalArrangement = Arrangement.Center,
         modifier = modifier.padding(horizontal = 28.dp)
     ) {
-        Surface(shape = CircleShape, color = NeonOrange.copy(alpha = .1f), modifier = Modifier.size(92.dp)) {
-            androidx.compose.foundation.Image(
-                painter = painterResource(R.drawable.shen_logo),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.padding(15.dp)
-            )
-        }
+        androidx.compose.foundation.Image(
+            painter = painterResource(R.drawable.shen_logo),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.size(88.dp)
+        )
         Spacer(Modifier.height(18.dp))
         Text("شروع یک گفتگوی تازه", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("با SHΞN™ Coder ایده‌ات را به پاسخ تبدیل کن", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
@@ -379,7 +422,8 @@ private fun Suggestion(label: String, value: String, onClick: (String) -> Unit) 
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.clickable { onClick(value) }.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+        shadowElevation = 8.dp,
+        modifier = Modifier.clickable { onClick(value) }
     ) { Text(label, color = NeonOrange, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp)) }
 }
 
@@ -390,11 +434,8 @@ private fun ChatBubble(message: ChatMessage, modelLabel: String, streaming: Bool
             Surface(
                 color = if (message.user) NeonOrangeDark else MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(.88f).border(
-                    1.dp,
-                    if (message.user) NeonOrange.copy(alpha = .75f) else MaterialTheme.colorScheme.outline,
-                    RoundedCornerShape(16.dp)
-                )
+                shadowElevation = 6.dp,
+                modifier = Modifier.fillMaxWidth(.88f)
             ) {
                 Column(Modifier.padding(14.dp)) {
                     Text(if (message.user) "شما" else modelLabel, color = if (message.user) Color.White else NeonOrange, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -408,11 +449,22 @@ private fun ChatBubble(message: ChatMessage, modelLabel: String, streaming: Bool
 }
 
 @Composable
-private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit, enabled: Boolean) {
+private fun Composer(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+    enabled: Boolean,
+    modifier: Modifier = Modifier
+) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(26.dp),
+            shadowElevation = 14.dp,
+            modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
+        ) {
             Box(
-                modifier = Modifier.fillMaxWidth().border(1.dp, NeonOrange.copy(alpha = .65f), RoundedCornerShape(18.dp)).padding(10.dp)
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 7.dp, bottom = 7.dp)
             ) {
                 BasicTextField(
                     value = value,
@@ -422,23 +474,57 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { onSend() }),
                     maxLines = 6,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp, max = 130.dp).padding(end = 54.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp, max = 130.dp),
                     decorationBox = { innerTextField ->
-                        Box {
-                            if (value.isEmpty()) Text("پیامت را بنویس...", color = TextMuted, fontSize = 14.sp, modifier = Modifier.align(Alignment.TopEnd))
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(end = 58.dp),
+                            contentAlignment = Alignment.CenterEnd
+                        ) {
+                            if (value.isEmpty()) {
+                                Text(
+                                    "پیامت را بنویس...",
+                                    color = TextMuted,
+                                    fontSize = 14.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.End,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                             innerTextField()
                         }
                     }
                 )
-                IconButton(
-                    onClick = onSend,
-                    enabled = enabled && value.isNotBlank(),
-                    modifier = Modifier.align(Alignment.CenterEnd).size(44.dp).background(NeonOrange, CircleShape)
-                ) { Icon(Icons.Default.Send, "ارسال", tint = Color.Black) }
+                Surface(
+                    color = if (enabled && value.isNotBlank()) NeonOrange else MaterialTheme.colorScheme.surface,
+                    shape = CircleShape,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.align(Alignment.CenterEnd).size(48.dp)
+                ) {
+                    IconButton(onClick = onSend, enabled = enabled && value.isNotBlank()) {
+                        Icon(Icons.Default.Send, "ارسال", tint = if (enabled && value.isNotBlank()) Color.Black else TextMuted)
+                    }
+                }
             }
         }
     }
 }
+
+private val CODEIN_CONNECTION_PROBE = """
+(async function() {
+  try {
+    const response = await fetch('/api/models', {headers: {'Accept': 'application/json'}});
+    if (!response.ok) {
+      CodeinBridge.connection('false');
+      return;
+    }
+    const payload = await response.json();
+    CodeinBridge.connection(Array.isArray(payload.data) && payload.data.length > 0 ? 'true' : 'false');
+  } catch (_) {
+    CodeinBridge.connection('false');
+  }
+})();
+""".trimIndent()
 
 private val CODEIN_JS_BRIDGE = """
 (function() {
@@ -452,24 +538,46 @@ private val CODEIN_JS_BRIDGE = """
         body: JSON.stringify({messages: JSON.parse(messagesJson), model: model, template: template})
       });
       if (!response.ok) throw new Error('HTTP ' + response.status);
+      if (!response.body) throw new Error('پاسخی از سرویس دریافت نشد');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let finished = false;
+      const textOf = value => {
+        if (typeof value === 'string') return value;
+        if (Array.isArray(value)) return value.map(item => typeof item === 'string' ? item : (item && item.text) || '').join('');
+        return value && typeof value.text === 'string' ? value.text : '';
+      };
+      const consume = chunk => {
+        buffer += chunk;
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line || !line.startsWith('data:')) continue;
+          const data = line.slice(line.indexOf(':') + 1).trimStart();
+          if (data === '[DONE]') {
+            finished = true;
+            break;
+          }
+          try {
+            const delta = (JSON.parse(data).choices || [])[0]?.delta || {};
+            const token = textOf(delta.content);
+            if (token) CodeinBridge.token(token);
+          } catch (_) {
+            // Ignore an incomplete SSE frame; the next chunk will finish it.
+          }
+        }
+      };
       while (true) {
         const part = await reader.read();
-        if (part.done) break;
-        buffer += decoder.decode(part.value, {stream: true});
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-        for (const event of events) {
-          const line = event.split('\n').find(x => x.startsWith('data: '));
-          if (!line) continue;
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          const json = JSON.parse(data);
-          const token = json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content;
-          if (token) CodeinBridge.token(token);
+        if (part.done) {
+          consume(decoder.decode());
+          if (buffer.trim()) consume('\n');
+          break;
         }
+        consume(decoder.decode(part.value, {stream: true}));
+        if (finished) break;
       }
       CodeinBridge.finished();
     } catch (error) {
