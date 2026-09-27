@@ -512,6 +512,7 @@ private fun MainChatScreen(
                             }
                         }
                     )
+                }
                     AnimatedVisibility(
                         visible = showSafetyWarning && !warningAcknowledged,
                         enter = fadeIn(tween(240)),
@@ -542,7 +543,6 @@ private fun MainChatScreen(
                             onLock = onLockApp
                         )
                     }
-                }
 
         }
     }
