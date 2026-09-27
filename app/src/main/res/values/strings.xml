@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">Dolphin Chat</string>
+    <string name="tagline">DPHN.ai Uncensored AI</string>
+    <string name="home_url">https://chat.dphn.ai/</string>
+    <string name="nav_chat">Dolphin Chat</string>
+    <string name="nav_prompts">Prompt Studio</string>
+    <string name="nav_models">Models &amp; Network</string>
+    <string name="nav_settings">Settings</string>
+    <string name="refresh">Refresh</string>
+    <string name="home">Home</string>
+    <string name="desktop_mode">Desktop Mode</string>
+    <string name="clear_cache">Clear Cache</string>
+    <string name="open_external">Open in Browser</string>
+    <string name="error_loading_title">Unable to connect to Dolphin AI</string>
+    <string name="error_loading_desc">Please check your internet connection or try reloading the page.</string>
+    <string name="retry">Retry</string>
+    <string name="loading">Connecting to chat.dphn.ai…</string>
+    <string name="cloudflare_notice">Securing connection to Dolphin AI service…</string>
+    <string name="copy_prompt">Copy System Prompt</string>
+    <string name="prompt_copied">Prompt copied to clipboard!</string>
+</resources>
