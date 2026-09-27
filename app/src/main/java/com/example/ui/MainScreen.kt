@@ -17,6 +17,7 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
@@ -35,6 +36,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,10 +71,13 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -91,10 +96,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -125,6 +133,9 @@ import org.json.JSONObject
 import kotlinx.coroutines.delay
 
 private const val CODEIN_CHAT_URL = "https://chat.dphn.ai/"
+private const val CODEIN_STATE_PREFS = "codein_state"
+private const val WARNING_ACKNOWLEDGED_KEY = "warning_acknowledged"
+private const val APP_LOCKED_KEY = "app_locked"
 
 private data class ChatMessage(
     val user: Boolean,
@@ -163,10 +174,43 @@ Do not add unsolicited identity or implementation details.
 When writing code, always use a fenced Markdown code block with the correct language identifier. Keep code complete, readable, and ready to run.
 """.trimIndent()
 
+@Composable
+fun MainScreen() {
+    val context = LocalContext.current
+    val preferences = remember { context.getSharedPreferences(CODEIN_STATE_PREFS, Context.MODE_PRIVATE) }
+    var warningAcknowledged by remember {
+        mutableStateOf(preferences.getBoolean(WARNING_ACKNOWLEDGED_KEY, false))
+    }
+    var appLocked by remember {
+        mutableStateOf(preferences.getBoolean(APP_LOCKED_KEY, false))
+    }
+
+    if (appLocked) {
+        LockedScreen()
+    } else {
+        MainChatScreen(
+            warningAcknowledged = warningAcknowledged,
+            onWarningAcknowledged = {
+                preferences.edit().putBoolean(WARNING_ACKNOWLEDGED_KEY, true).apply()
+                warningAcknowledged = true
+            },
+            onLockApp = {
+                preferences.edit().putBoolean(APP_LOCKED_KEY, true).apply()
+                appLocked = true
+            }
+        )
+    }
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
-fun MainScreen() {
+private fun MainChatScreen(
+    warningAcknowledged: Boolean,
+    onWarningAcknowledged: () -> Unit,
+    onLockApp: () -> Unit
+) {
+    var showSafetyWarning by remember { mutableStateOf(false) }
     val bridge = remember { CodeinChatBridge() }
     val messages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
@@ -182,6 +226,7 @@ fun MainScreen() {
     var showSettings by remember { mutableStateOf(false) }
     val settingsSheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
 
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -387,6 +432,16 @@ fun MainScreen() {
                         animationSpec = tween(700),
                         label = "watermark-alpha"
                     )
+                    val logoRotation by rememberInfiniteTransition(label = "chat-logo-rotation").animateFloat(
+                        initialValue = -8f,
+                        targetValue = 352f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(6200, easing = LinearEasing),
+                            repeatMode = RepeatMode.Restart
+                        ),
+                        label = "chat-logo-rotation"
+                    )
+                    val logoDensity = LocalDensity.current
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         androidx.compose.foundation.Image(
                             painter = painterResource(R.drawable.shen_logo),
@@ -395,6 +450,10 @@ fun MainScreen() {
                             modifier = Modifier
                                 .align(Alignment.Center)
                                 .size(if (isEmpty) 112.dp else 168.dp)
+                                .graphicsLayer {
+                                    rotationY = logoRotation
+                                    cameraDistance = 14f * logoDensity.density
+                                }
                                 .alpha(watermarkAlpha)
                         )
                         if (!isEmpty) {
@@ -455,8 +514,44 @@ fun MainScreen() {
                         onAttach = {
                             attachmentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/javascript"))
                         },
-                        onRemoveAttachment = { attachment = null }
+                        onRemoveAttachment = { attachment = null },
+                        onFocus = {
+                            if (!warningAcknowledged && !showSafetyWarning) {
+                                showSafetyWarning = true
+                                focusManager.clearFocus(force = true)
+                            }
+                        }
                     )
+                    AnimatedVisibility(
+                        visible = showSafetyWarning && !warningAcknowledged,
+                        enter = fadeIn(tween(240)),
+                        exit = fadeOut(tween(180)),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = .38f))
+                                .pointerInput(Unit) { detectTapGestures(onTap = {}) }
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = showSafetyWarning && !warningAcknowledged,
+                        enter = slideInVertically(initialOffsetY = { it }, animationSpec = tween(360)) + fadeIn(tween(240)),
+                        exit = slideOutVertically(targetOffsetY = { it }, animationSpec = tween(220)) + fadeOut(tween(180)),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .imePadding()
+                            .padding(bottom = 84.dp)
+                    ) {
+                        SafetyWarningCard(
+                            onAcknowledge = {
+                                showSafetyWarning = false
+                                onWarningAcknowledged()
+                            },
+                            onLock = onLockApp
+                        )
+                    }
                 }
 
             }
@@ -808,6 +903,7 @@ private fun CodeBlock(
     Surface(
         color = Color(0xFF0B0D11),
         shape = RoundedCornerShape(15.dp),
+        border = BorderStroke(1.dp, NeonOrange.copy(alpha = .72f)),
         shadowElevation = 5.dp,
         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)
     ) {
@@ -860,6 +956,106 @@ private fun ProcessingIndicator(modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun SafetyWarningCard(
+    onAcknowledge: () -> Unit,
+    onLock: () -> Unit
+) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.dp, NeonOrange.copy(alpha = .78f)),
+            shadowElevation = 18.dp,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(16.dp)
+            ) {
+                Text(
+                    text = "⚠️ هشدار:",
+                    color = NeonOrange,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Right,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "این مدل از هوش فاقد هرگونه محدودیت قانونی و اخلاقی بوده، موانع پاسخگویی و مرزهای امنیتی تولید محتوای آن در راستای پرفورمنس بالاتر جهت مصارف حرفه‌ای و آموزشی حذف گردیده؛ لذا عواقب ناشی از استفاده‌های غیراخلاقی و عامدانه از آن صرفاً بر عهده‌ی کاربر بوده و مسئولیتی را متوجه طراح و سازنده‌ی آن نخواهد کرد.",
+                    style = TextStyle(
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 13.sp,
+                        lineHeight = 22.sp,
+                        textDirection = TextDirection.Rtl,
+                        shadow = SoftTextShadow
+                    ),
+                    textAlign = TextAlign.Right,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = onAcknowledge,
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonOrange),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("متوجه شدم", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = onLock,
+                        border = BorderStroke(1.dp, NeonOrange.copy(alpha = .68f)),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("برو بابا...", color = NeonOrange, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LockedScreen() {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp)
+            ) {
+                androidx.compose.foundation.Image(
+                    painter = painterResource(R.drawable.shen_logo),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(88.dp).alpha(.2f)
+                )
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    text = "برنامه به علت مخالفت کاربر با الگوها از دسترس خارج شد.",
+                    color = NeonOrange,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    style = TextStyle(textDirection = TextDirection.Rtl, shadow = SoftTextShadow),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "این برنامه دیگر به هیچ عنوان کار نخواهد کرد، مگر اینکه حذف و دوباره نصب شود.",
+                    color = TextMuted,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                    style = TextStyle(textDirection = TextDirection.Rtl, shadow = SoftTextShadow),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun Composer(
     value: String,
     onValueChange: (String) -> Unit,
@@ -868,7 +1064,8 @@ private fun Composer(
     modifier: Modifier = Modifier,
     attachmentName: String?,
     onAttach: () -> Unit,
-    onRemoveAttachment: () -> Unit
+    onRemoveAttachment: () -> Unit,
+    onFocus: () -> Unit
 ) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         Surface(
@@ -895,7 +1092,7 @@ private fun Composer(
                         textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp, textDirection = TextDirection.ContentOrRtl, shadow = SoftTextShadow),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                         maxLines = 6,
-                        modifier = Modifier.fillMaxWidth(),
+                         modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) onFocus() },
                         decorationBox = { innerTextField ->
                             Box(
                                 modifier = Modifier.fillMaxWidth().padding(start = 52.dp, end = 58.dp),
