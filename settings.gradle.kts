@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Dolphin Chat"
+rootProject.name = "Codein"
 
 include(":app")

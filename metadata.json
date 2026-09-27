@@ -1,6 +1,6 @@
 {
-  "name": "Dolphin Chat",
-  "description": "Android application client for Dolphin AI (chat.dphn.ai) uncensored intelligent conversational service",
+  "name": "Codein",
+  "description": "SHΞN™ Coder Android client with a custom dark workspace and streaming chat",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": ["STREAMING_CHAT", "CUSTOM_COMPOSE_UI"]
 }
