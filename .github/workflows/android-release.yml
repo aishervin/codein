@@ -97,7 +97,7 @@ jobs:
           STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --no-daemon --stacktrace -PversionName="${{ steps.release.outputs.version_name }}" -PversionCode="${{ steps.release.outputs.version_code }}"
+        run: bash ./gradlew assembleRelease --no-daemon --stacktrace -PversionName="${{ steps.release.outputs.version_name }}" -PversionCode="${{ steps.release.outputs.version_code }}"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
