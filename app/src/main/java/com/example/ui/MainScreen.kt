@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -98,6 +99,7 @@ private val codeinModels = listOf(
 )
 
 @SuppressLint("SetJavaScriptEnabled")
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
     val bridge = remember { CodeinChatBridge() }
@@ -218,7 +220,10 @@ fun MainScreen() {
                         isConnected = isConnected
                     )
                     if (messages.isEmpty() && activeAnswer.isEmpty()) {
-                        EmptyState(onSuggestion = { input = it })
+                        EmptyState(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            onSuggestion = { input = it }
+                        )
                     } else {
                         LazyColumn(
                             state = listState,
@@ -344,11 +349,11 @@ private fun CodeinHeader(
 }
 
 @Composable
-private fun EmptyState(onSuggestion: (String) -> Unit) {
+private fun EmptyState(modifier: Modifier, onSuggestion: (String) -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
-        modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 28.dp)
+        modifier = modifier.padding(horizontal = 28.dp)
     ) {
         Surface(shape = CircleShape, color = NeonOrange.copy(alpha = .1f), modifier = Modifier.size(92.dp)) {
             androidx.compose.foundation.Image(
