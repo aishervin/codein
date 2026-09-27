@@ -554,7 +554,6 @@ private fun MainChatScreen(
                     }
                 }
 
-            }
         }
     }
 
