@@ -80,6 +80,7 @@ import com.example.ui.components.CodeinSettingsSheet
 import com.example.ui.components.PromptStudioSheet
 import com.example.ui.theme.NeonOrange
 import com.example.ui.theme.NeonOrangeDark
+import com.example.ui.theme.NeonOrangeSoft
 import com.example.ui.theme.TextMuted
 import org.json.JSONArray
 import org.json.JSONObject
