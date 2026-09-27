@@ -118,6 +118,7 @@ import com.example.ui.components.CodeinSettingsSheet
 import com.example.ui.theme.NeonOrange
 import com.example.ui.theme.NeonOrangeDark
 import com.example.ui.theme.NeonOrangeSoft
+import com.example.ui.theme.SoftTextShadow
 import com.example.ui.theme.TextMuted
 import org.json.JSONArray
 import org.json.JSONObject
@@ -187,7 +188,7 @@ fun MainScreen() {
         runCatching { readTextAttachment(context, uri) }
             .onSuccess { attachment = it }
             .onFailure {
-                android.widget.Toast.makeText(context, "فقط فایل متنی تا یک مگابایت قابل پیوست است", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, "Only text files up to 1 MB can be attached", android.widget.Toast.LENGTH_SHORT).show()
             }
     }
     val downloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
@@ -197,9 +198,9 @@ fun MainScreen() {
             runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { output ->
                     output.write(payload.content.toByteArray(Charsets.UTF_8))
-                } ?: error("فایل باز نشد")
+                } ?: error("File could not be opened")
             }.onFailure {
-                android.widget.Toast.makeText(context, "ذخیره فایل انجام نشد", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, "File was not saved", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -215,7 +216,7 @@ fun MainScreen() {
     fun copyToClipboard(text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Codein", text))
-        android.widget.Toast.makeText(context, "کپی شد", android.widget.Toast.LENGTH_SHORT).show()
+        android.widget.Toast.makeText(context, "Copied", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     fun downloadText(content: String, suggestedName: String) {
@@ -245,14 +246,14 @@ fun MainScreen() {
         val target = webView
         if (target == null) {
             isStreaming = false
-            messages.add(ChatMessage(user = false, text = "اتصال داخلی آماده نیست؛ دوباره تلاش کن."))
+            messages.add(ChatMessage(user = false, text = "Internal connection is not ready. Try again."))
             return
         }
         val script = "if (typeof window.CodeinNativeSend === 'function') " +
             "window.CodeinNativeSend(${JSONObject.quote(requestMessages.toString())}," +
             "${JSONObject.quote(selectedModel.id)},${JSONObject.quote("logical")}," +
             "${JSONObject.quote(SHEN_SYSTEM_PROMPT)});" +
-            " else CodeinBridge.error('پل اتصال آماده نیست');"
+            " else CodeinBridge.error('Internal bridge is not ready');"
         target.evaluateJavascript(script, null)
     }
 
@@ -261,7 +262,7 @@ fun MainScreen() {
         val selectedAttachment = attachment
         if ((text.isEmpty() && selectedAttachment == null) || isStreaming || !isConnected) return
         val requestText = buildRequestContent(text, selectedAttachment)
-        val displayText = text.ifEmpty { "فایل: ${selectedAttachment?.name}" }
+        val displayText = text.ifEmpty { "File: ${selectedAttachment?.name}" }
         input = ""
         attachment = null
         sendRequest(displayText, requestText, selectedAttachment?.name, messages.toList())
@@ -291,7 +292,7 @@ fun MainScreen() {
         if (activeAnswer.isNotBlank()) messages.add(ChatMessage(user = false, text = activeAnswer))
         activeAnswer = ""
         isStreaming = false
-        messages.add(ChatMessage(user = false, text = "خطا در ارتباط با سرویس: $it"))
+        messages.add(ChatMessage(user = false, text = "Service connection error: $it"))
     }
 
     LaunchedEffect(messages.size, activeAnswer.length, isStreaming) {
@@ -504,10 +505,10 @@ private fun CodeinHeader(
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     IconButton(onClick = onSettings, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Default.Settings, "تنظیمات", tint = TextMuted, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Settings, "Settings", tint = TextMuted, modifier = Modifier.size(18.dp))
                     }
                     IconButton(onClick = onNewChat, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Default.Add, "گفتگوی جدید", tint = TextMuted, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Add, "New conversation", tint = TextMuted, modifier = Modifier.size(18.dp))
                     }
                 }
                 ModelPicker(selectedModel, onSelectModel)
@@ -738,7 +739,7 @@ private fun ChatBubble(
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                     message.attachmentName?.let {
-                                        Text("فایل پیوست: $it", color = TextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("Attachment: $it", color = TextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                 }
                             } else {
@@ -759,7 +760,7 @@ private fun ChatBubble(
                             is MessagePart.Text -> if (part.value.isNotBlank()) {
                                 Text(
                                     part.value.trim(),
-                                    style = TextStyle(textDirection = TextDirection.ContentOrRtl),
+                                        style = TextStyle(textDirection = TextDirection.ContentOrRtl, shadow = SoftTextShadow),
                                     lineHeight = 23.sp,
                                     modifier = Modifier.fillMaxWidth()
                                 )
@@ -783,8 +784,8 @@ private fun ChatBubble(
 @Composable
 private fun MessageActions(user: Boolean, onCopy: () -> Unit, onRetry: () -> Unit) {
     Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth().padding(top = 5.dp)) {
-        SmallActionButton(Icons.Default.ContentCopy, "کپی", onCopy)
-        if (user) SmallActionButton(Icons.Default.Refresh, "تلاش دوباره", onRetry)
+        SmallActionButton(Icons.Default.ContentCopy, "Copy", onCopy)
+        if (user) SmallActionButton(Icons.Default.Refresh, "Retry", onRetry)
     }
 }
 
@@ -814,8 +815,8 @@ private fun CodeBlock(
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Text(displayLanguage, color = TextMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    SmallActionButton(Icons.Default.ContentCopy, "کپی کد") { onCopy(code) }
-                    SmallActionButton(Icons.Default.Download, "دانلود کد") { onDownload(code, codeFileName(displayLanguage)) }
+                    SmallActionButton(Icons.Default.ContentCopy, "Copy code") { onCopy(code) }
+                    SmallActionButton(Icons.Default.Download, "Download code") { onDownload(code, codeFileName(displayLanguage)) }
                 }
                 Text(
                     text = highlightCode(code.trimEnd(), displayLanguage),
@@ -882,7 +883,7 @@ private fun Composer(
                         Icon(Icons.Default.AttachFile, contentDescription = null, tint = NeonOrange, modifier = Modifier.size(16.dp))
                         Text(name, color = TextMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 5.dp))
                         IconButton(onClick = onRemoveAttachment, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "حذف فایل", tint = TextMuted, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Close, contentDescription = "Remove attachment", tint = TextMuted, modifier = Modifier.size(16.dp))
                         }
                     }
                 }
@@ -891,7 +892,7 @@ private fun Composer(
                         value = value,
                         onValueChange = onValueChange,
                         enabled = enabled,
-                        textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp, textDirection = TextDirection.ContentOrRtl),
+                        textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp, textDirection = TextDirection.ContentOrRtl, shadow = SoftTextShadow),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                         maxLines = 6,
                         modifier = Modifier.fillMaxWidth(),
@@ -902,7 +903,7 @@ private fun Composer(
                             ) {
                                 if (value.isEmpty()) {
                                     Text(
-                                        if (attachmentName == null) "پیامت را بنویس..." else "متن همراه فایل (اختیاری)",
+                                        if (attachmentName == null) "Write a message..." else "Optional text with attachment",
                                         color = TextMuted,
                                         fontSize = 14.sp,
                                         maxLines = 1,
@@ -916,7 +917,7 @@ private fun Composer(
                         }
                     )
                     IconButton(onClick = onAttach, enabled = enabled, modifier = Modifier.align(Alignment.CenterStart).size(42.dp)) {
-                        Icon(Icons.Default.AttachFile, "پیوست فایل", tint = if (enabled) NeonOrange else TextMuted)
+                        Icon(Icons.Default.AttachFile, "Attach file", tint = if (enabled) NeonOrange else TextMuted)
                     }
                     val canSend = enabled && (value.isNotBlank() || attachmentName != null)
                     Surface(
@@ -926,7 +927,7 @@ private fun Composer(
                         modifier = Modifier.align(Alignment.CenterEnd).size(48.dp)
                     ) {
                         IconButton(onClick = onSend, enabled = canSend) {
-                            Icon(Icons.Default.ArrowUpward, "ارسال", tint = if (canSend) NeonOrange else TextMuted)
+                            Icon(Icons.Default.ArrowUpward, "Send", tint = if (canSend) NeonOrange else TextMuted)
                         }
                     }
                 }
@@ -947,11 +948,11 @@ private fun readTextAttachment(context: Context, uri: Uri): CodeinAttachment {
             if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) declaredSize = cursor.getLong(sizeIndex)
         }
     }
-    if (declaredSize != null && declaredSize!! > MAX_ATTACHMENT_BYTES) error("فایل بزرگ است")
-    val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("فایل باز نشد")
-    if (bytes.size > MAX_ATTACHMENT_BYTES) error("فایل بزرگ است")
+    if (declaredSize != null && declaredSize!! > MAX_ATTACHMENT_BYTES) error("File is too large")
+    val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("File could not be opened")
+    if (bytes.size > MAX_ATTACHMENT_BYTES) error("File is too large")
     val content = bytes.toString(Charsets.UTF_8)
-    if (content.contains('\u0000')) error("فایل متنی نیست")
+    if (content.contains('\u0000')) error("Attachment is not a text file")
     return CodeinAttachment(name, content)
 }
 
@@ -962,7 +963,7 @@ private fun buildRequestContent(text: String, attachment: CodeinAttachment?): St
             append(text)
             append("\n\n")
         }
-        append("فایل پیوست‌شده: ")
+        append("Attached file: ")
         append(attachment.name)
         append("\n```\n")
         append(attachment.content)
@@ -1062,7 +1063,7 @@ private val CODEIN_JS_BRIDGE = """
         const detail = await response.text();
         throw new Error('HTTP ' + response.status + (detail ? ': ' + detail.slice(0, 120) : ''));
       }
-      if (!response.body) throw new Error('پاسخی از سرویس دریافت نشد');
+       if (!response.body) throw new Error('No response received from service');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';

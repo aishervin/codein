@@ -15,12 +15,14 @@ val Typography =
         fontSize = 16.sp,
         lineHeight = 24.sp,
         letterSpacing = 0.15.sp,
+        shadow = SoftTextShadow,
       ),
     bodyMedium = TextStyle(
       fontFamily = FontFamily.SansSerif,
       fontSize = 14.sp,
       lineHeight = 22.sp,
       letterSpacing = 0.1.sp,
+      shadow = SoftTextShadow,
     ),
     titleLarge = TextStyle(
       fontFamily = FontFamily.SansSerif,
@@ -28,6 +30,7 @@ val Typography =
       fontSize = 22.sp,
       lineHeight = 28.sp,
       letterSpacing = 0.sp,
+      shadow = SoftTextShadow,
     ),
     labelSmall = TextStyle(
       fontFamily = FontFamily.SansSerif,
@@ -35,5 +38,6 @@ val Typography =
       fontSize = 11.sp,
       lineHeight = 16.sp,
       letterSpacing = 0.35.sp,
+      shadow = SoftTextShadow,
     ),
   )

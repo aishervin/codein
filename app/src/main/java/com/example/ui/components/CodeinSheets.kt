@@ -2,6 +2,8 @@ package com.example.ui.components
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -26,16 +28,19 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.widget.Toast
+import com.example.R
 import com.example.ui.theme.NeonOrange
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,69 +53,89 @@ fun CodeinSettingsSheet(
     isConnected: Boolean
 ) {
     val context = LocalContext.current
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-            SheetTitle(Icons.Default.Settings, "تنظیمات Codein", "کنترل نشست و تجربه گفتگو")
-            Spacer(Modifier.height(14.dp))
-            SettingRow(
-                icon = Icons.Default.DeleteSweep,
-                title = "گفتگوی جدید",
-                subtitle = "پیام‌های این گفتگو پاک می‌شوند",
-                onClick = {
-                    onClearChat()
-                    Toast.makeText(context, "گفتگو پاک شد", Toast.LENGTH_SHORT).show()
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                SheetTitle(Icons.Default.Settings, "Settings", "Session and conversation controls")
+                Spacer(Modifier.height(14.dp))
+                SettingRow(
+                    icon = Icons.Default.DeleteSweep,
+                    title = "New conversation",
+                    subtitle = "Start with a clean conversation",
+                    onClick = {
+                        onClearChat()
+                        Toast.makeText(context, "Conversation cleared", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
+                SettingRow(
+                    icon = Icons.Default.DeleteSweep,
+                    title = "Clear browser session",
+                    subtitle = "Remove cookies and local session data",
+                    onClick = {
+                        onClearSession()
+                        Toast.makeText(context, "Browser session cleared", Toast.LENGTH_SHORT).show()
+                    }
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
+                SettingRow(
+                    icon = Icons.Default.Info,
+                    title = "Service status",
+                    subtitle = if (isConnected) "Connected and ready" else "Connecting to service",
+                    onClick = {}
+                )
+                Spacer(Modifier.height(16.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .78f),
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, NeonOrange.copy(alpha = .16f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text(
+                            "DEVELOPER",
+                            color = NeonOrange,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.8.sp
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text("SHΞЯVIN™", color = MaterialTheme.colorScheme.onSurface, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+                        Spacer(Modifier.height(6.dp))
+                        Text("Designed and crafted for focused conversations and code.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        Text("A private interface by SHΞЯVIN™.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        Spacer(Modifier.height(12.dp))
+                        Text("CODΞiN™  •  SHΞN™", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
-            SettingRow(
-                icon = Icons.Default.DeleteSweep,
-                title = "پاک‌سازی نشست مرورگر",
-                subtitle = "کوکی‌ها و داده‌های نشست داخلی پاک می‌شوند",
-                onClick = {
-                    onClearSession()
-                    Toast.makeText(context, "نشست پاک شد", Toast.LENGTH_SHORT).show()
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
+                ) {
+                    SocialLink(R.drawable.ic_social_telegram, "Telegram", "https://t.me/shervini", context)
+                    SocialLink(R.drawable.ic_social_x, "X", "https://x.com/shervinonx", context)
+                    SocialLink(R.drawable.ic_social_github, "GitHub", "https://github.com/aishervin", context)
                 }
-            )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
-            SettingRow(
-                icon = Icons.Default.Info,
-                title = "وضعیت سرویس",
-                subtitle = if (isConnected) "اتصال آماده است" else "در حال اتصال به سرویس",
-                onClick = {}
-            )
-            Spacer(Modifier.height(12.dp))
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 30.dp)
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("☬Exclusive SHΞN™ made", color = NeonOrange, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("CODΞiN™  •  SHΞN", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                    Text("Developer: SHΞN™", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                }
-            }
-            Row(
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
-            ) {
-                SocialLink("Telegram", "https://t.me/shervini", context)
-                SocialLink("GitHub", "https://github.com/aishervin", context)
-                SocialLink("X", "https://x.com/shervinonx", context)
             }
         }
     }
 }
 
 @Composable
-private fun SocialLink(label: String, url: String, context: android.content.Context) {
-    TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }) {
-        Text(label, color = NeonOrange, fontSize = 12.sp)
+private fun SocialLink(icon: Int, label: String, url: String, context: android.content.Context) {
+    IconButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }, modifier = Modifier.size(48.dp)) {
+        Icon(
+            painter = painterResource(icon),
+            contentDescription = label,
+            tint = NeonOrange,
+            modifier = Modifier.size(25.dp)
+        )
     }
 }
 
