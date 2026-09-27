@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag, for example v2.1.0"
+        description: "Release tag, for example v1.0.0"
         required: true
-        default: "v2.1.5"
+        default: "v1.0.0"
         type: string
       version_name:
         description: "Android versionName; leave empty to derive it from the tag"
@@ -16,7 +16,7 @@ on:
       version_code:
         description: "Integer versionCode; must increase for every update"
         required: true
-        default: "8"
+        default: "9"
         type: string
       prerelease:
         description: "Mark the GitHub Release as a pre-release"
