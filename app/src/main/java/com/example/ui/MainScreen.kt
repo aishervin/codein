@@ -492,7 +492,6 @@ private fun MainChatScreen(
                                 .height(24.dp)
                                 .background(Brush.verticalGradient(listOf(historyFade.copy(alpha = 0f), historyFade)))
                         )
-                        }
                     }
                     }
                     Composer(
@@ -546,6 +545,8 @@ private fun MainChatScreen(
                 }
 
         }
+    }
+
     }
 
     if (showSettings) {
