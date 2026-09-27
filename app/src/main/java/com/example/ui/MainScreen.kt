@@ -97,7 +97,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -476,17 +475,18 @@ private fun MainChatScreen(
                                     ProcessingIndicator()
                                 }
                             }
-                            if (activeAnswer.isNotEmpty()) {
-                                item {
-                                    ChatBubble(
-                                        message = ChatMessage(false, activeAnswer),
-                                        onCopy = ::copyToClipboard,
-                                        onRetry = ::retryMessage,
-                                        onDownload = ::downloadText
-                                )
-                            }
-                        }
-                        val historyFade = MaterialTheme.colorScheme.background
+                             if (activeAnswer.isNotEmpty()) {
+                                 item {
+                                     ChatBubble(
+                                         message = ChatMessage(false, activeAnswer),
+                                         onCopy = ::copyToClipboard,
+                                         onRetry = ::retryMessage,
+                                         onDownload = ::downloadText
+                                     )
+                                 }
+                             }
+                         }
+                         val historyFade = MaterialTheme.colorScheme.background
                         Box(
                             Modifier
                                 .align(Alignment.TopCenter)
@@ -679,7 +679,6 @@ private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel)
             .pointerInput(selectedModel.id) {
                 detectVerticalDragGestures(
                     onVerticalDrag = { change, dragAmount ->
-                        change.consume()
                         dragDistance += dragAmount
                     },
                     onDragEnd = {
