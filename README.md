@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/aishervin/codein/main/app/src/main/res/drawable/shen_logo.png" alt="CODΞiN logo" width="128" />
   <h1>CODΞiN™</h1>
   <p><strong>SHΞN™ Coder</strong></p>
-  <p dir="rtl">یک فضای متمرکز برای گفتگو، ایده‌پردازی و کار با کد</p>
+  <p dir="rtl">یک فضای متمرکز برای گفتگو و ایده‌پردازی های غیر قانونی شما</p>
 </div>
 
 <p dir="ltr" align="center">
@@ -23,13 +23,13 @@
 
 <h2 dir="rtl" align="right">درباره‌ی پروژه</h2>
 
-<p dir="rtl" align="right"><bdi dir="ltr">Codein</bdi> یک کلاینت اندرویدی مستقل با هویت <bdi dir="ltr">SHΞN™</bdi> است؛ برای وقتی که می‌خواهید بدون شلوغی، سریع وارد گفتگو شوید و ایده‌تان را به نتیجه نزدیک کنید.</p>
+<p dir="rtl" align="right"><bdi dir="ltr">Codein</bdi> یک کلاینت اندرویدی مستقل با هویت <bdi dir="ltr">SHΞN™</bdi> است؛ برای وقتی که می‌خواهید بدون تعارف ، سریع ، بی‌حاشیه و معذوریت های اخلاقی مشورت کنید و ایده‌تان را به نتیجه نزدیک کنید.</p>
 
-<p dir="rtl" align="right">تمرکز پروژه روی یک تجربه‌ی تمیز و جدی است: صفحه‌ای آرام برای فکرکردن، نوشتن، بررسی مسئله و کار با کد.</p>
+<p dir="rtl" align="right">تمرکز پروژه روی یک تجربه‌ی بی پرده و جدی است: صفحه‌ای آرام برای فکرکردن، نوشتن، بررسی مسئله و حقایق.</p>
 
 <h2 dir="rtl" align="right">امکانات</h2>
 
-<h3 dir="rtl" align="right">گفتگوی زنده و روان</h3>
+<h3 dir="rtl" align="right">گفتگوی آزاد و بدون مانع</h3>
 <p dir="rtl" align="right">پاسخ‌ها هنگام آماده‌شدن نمایش داده می‌شوند تا جریان گفتگو قطع نشود و لازم نباشد برای دیدن نتیجه منتظر بمانید.</p>
 
 <h3 dir="rtl" align="right">انتخاب حالت گفتگو</h3>
