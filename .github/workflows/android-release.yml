@@ -92,33 +92,12 @@ jobs:
           echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/codein-release.jks"
 
       - name: Build signed APK
-        id: build
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/codein-release.jks
           STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        shell: bash
-        run: |
-          set +e
-          bash ./gradlew assembleRelease --no-daemon --stacktrace -PversionName="${{ steps.release.outputs.version_name }}" -PversionCode="${{ steps.release.outputs.version_code }}" 2>&1 | tee "$RUNNER_TEMP/gradle.log"
-          status=${PIPESTATUS[0]}
-          if [[ "$status" != "0" ]]; then
-            while IFS= read -r line; do
-              if [[ "$line" == e:\ * || "$line" == *"FAILURE"* || "$line" == *"error:"* ]]; then
-                echo "::error title=Gradle failure::$line"
-              fi
-            done < "$RUNNER_TEMP/gradle.log"
-          fi
-          exit "$status"
-
-      - name: Upload Gradle diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gradle-diagnostics-${{ github.run_id }}
-          path: ${{ runner.temp }}/gradle.log
-          if-no-files-found: warn
+        run: bash ./gradlew assembleRelease --no-daemon --stacktrace -PversionName="${{ steps.release.outputs.version_name }}" -PversionCode="${{ steps.release.outputs.version_code }}"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
