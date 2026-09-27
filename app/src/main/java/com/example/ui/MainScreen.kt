@@ -16,22 +16,25 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,7 +66,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -224,7 +227,6 @@ fun MainScreen() {
     ) {
         if (isStreaming || !isConnected) return
         val requestMessages = JSONArray()
-        requestMessages.put(JSONObject().put("role", "system").put("content", SHEN_SYSTEM_PROMPT))
         history.forEach { message ->
             requestMessages.put(
                 JSONObject()
@@ -244,7 +246,8 @@ fun MainScreen() {
         }
         val script = "if (typeof window.CodeinNativeSend === 'function') " +
             "window.CodeinNativeSend(${JSONObject.quote(requestMessages.toString())}," +
-            "${JSONObject.quote(selectedModel.id)},${JSONObject.quote("logical")});" +
+            "${JSONObject.quote(selectedModel.id)},${JSONObject.quote("logical")}," +
+            "${JSONObject.quote(SHEN_SYSTEM_PROMPT)});" +
             " else CodeinBridge.error('پل اتصال آماده نیست');"
         target.evaluateJavascript(script, null)
     }
@@ -471,8 +474,24 @@ private fun CodeinHeader(
     connectionFailed: Boolean,
     onRetry: () -> Unit
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Box(Modifier.fillMaxWidth()) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Row(
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    IconButton(onClick = onSettings, modifier = Modifier.size(34.dp)) {
+                        Icon(Icons.Default.Settings, "تنظیمات", tint = TextMuted, modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onNewChat, modifier = Modifier.size(34.dp)) {
+                        Icon(Icons.Default.Add, "گفتگوی جدید", tint = TextMuted, modifier = Modifier.size(18.dp))
+                    }
+                }
+                ModelPicker(selectedModel, onSelectModel)
+            }
+            Spacer(Modifier.height(5.dp))
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
@@ -491,20 +510,7 @@ private fun CodeinHeader(
                 )
                 ConnectionStatus(isConnected, connectionFailed, onRetry)
             }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier.align(Alignment.TopStart)
-            ) {
-                IconButton(onClick = onNewChat, modifier = Modifier.size(34.dp)) {
-                    Icon(Icons.Default.Add, "گفتگوی جدید", tint = TextMuted, modifier = Modifier.size(18.dp))
-                }
-                IconButton(onClick = onSettings, modifier = Modifier.size(34.dp)) {
-                    Icon(Icons.Default.Settings, "تنظیمات", tint = TextMuted, modifier = Modifier.size(18.dp))
-                }
-            }
         }
-        Spacer(Modifier.height(7.dp))
-        ModelPicker(selectedModel, onSelectModel)
     }
 }
 
@@ -538,48 +544,109 @@ private fun ConnectionStatus(isConnected: Boolean, connectionFailed: Boolean, on
 }
 
 @Composable
-@OptIn(ExperimentalAnimationApi::class)
 private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel) -> Unit) {
-    val otherModel = codeinModels.firstOrNull { it.id != selectedModel.id } ?: selectedModel
-    var introFinished by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        delay(260)
-        introFinished = true
+    var expanded by remember { mutableStateOf(false) }
+    var dragDistance by remember { mutableStateOf(0f) }
+    val dragState = rememberDraggableState { delta -> dragDistance += delta }
+
+    fun select(model: CodeinModel) {
+        onSelectModel(model)
+        expanded = false
+        dragDistance = 0f
     }
-    val visibleTopId = if (introFinished) selectedModel.id else otherModel.id
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            Text("ᴍᴏᴅᴇʟ", color = TextMuted, fontFamily = FontFamily.SansSerif, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-            Text("|", color = TextMuted.copy(alpha = .45f), fontSize = 11.sp)
+
+    Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(154.dp)) {
+        Surface(
+            color = Color.Transparent,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, if (expanded) NeonOrange else TextMuted.copy(alpha = .55f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    "SHΞN™",
+                    color = NeonOrange,
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    selectedModel.suffix,
+                    color = NeonOrange,
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.width(5.dp))
+                Text("⌄", color = TextMuted, fontSize = 14.sp)
+            }
         }
-        AnimatedContent(
-            targetState = visibleTopId,
-            transitionSpec = {
-                (slideInVertically { -it } + fadeIn(tween(180))) togetherWith
-                    (slideOutVertically { it } + fadeOut(tween(150)))
-            },
-            label = "model-swap"
-        ) { activeId ->
-            val activeModel = codeinModels.firstOrNull { it.id == activeId } ?: selectedModel
-            val inactiveModel = codeinModels.firstOrNull { it.id != activeModel.id } ?: activeModel
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("SHΞN™", color = MaterialTheme.colorScheme.onSurface, fontFamily = FontFamily.SansSerif, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Column(horizontalAlignment = Alignment.Start) {
-                    Text(
-                        activeModel.suffix,
-                        color = if (activeModel.id == selectedModel.id) MaterialTheme.colorScheme.onSurface else TextMuted,
-                        fontFamily = FontFamily.SansSerif,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable { onSelectModel(activeModel) }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(140)) + expandVertically(expandFrom = Alignment.Top),
+            exit = fadeOut(tween(110)) + shrinkVertically(shrinkTowards = Alignment.Top)
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, TextMuted.copy(alpha = .35f)),
+                shadowElevation = 8.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 5.dp)
+                    .draggable(
+                        state = dragState,
+                        orientation = Orientation.Vertical,
+                        onDragStarted = { dragDistance = 0f },
+                        onDragStopped = {
+                            if (kotlin.math.abs(dragDistance) > 22f) {
+                                val nextIndex = if (dragDistance < 0f) {
+                                    (codeinModels.indexOf(selectedModel) + 1) % codeinModels.size
+                                } else {
+                                    (codeinModels.indexOf(selectedModel) - 1 + codeinModels.size) % codeinModels.size
+                                }
+                                select(codeinModels[nextIndex])
+                            } else {
+                                dragDistance = 0f
+                            }
+                        }
                     )
-                    Text(
-                        inactiveModel.suffix,
-                        color = if (inactiveModel.id == selectedModel.id) MaterialTheme.colorScheme.onSurface else TextMuted.copy(alpha = .62f),
-                        fontFamily = FontFamily.SansSerif,
-                        fontSize = 11.sp,
-                        modifier = Modifier.clickable { onSelectModel(inactiveModel) }
-                    )
+            ) {
+                Column(Modifier.padding(vertical = 4.dp)) {
+                    codeinModels.forEach { model ->
+                        val active = model.id == selectedModel.id
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { select(model) }
+                                .padding(horizontal = 11.dp, vertical = 9.dp)
+                        ) {
+                            Text(
+                                "SHΞN™",
+                                color = if (active) NeonOrange else TextMuted,
+                                fontFamily = FontFamily.SansSerif,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                model.suffix,
+                                color = if (active) NeonOrange else TextMuted,
+                                fontFamily = FontFamily.SansSerif,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -599,7 +666,7 @@ private fun SilverText(
         initialValue = -1f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = LinearEasing),
+            animation = tween(5200, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "silver-sweep"
@@ -822,13 +889,13 @@ private fun Composer(
                     }
                     val canSend = enabled && (value.isNotBlank() || attachmentName != null)
                     Surface(
-                        color = if (canSend) NeonOrange else MaterialTheme.colorScheme.surface,
+                        color = Color.Transparent,
                         shape = CircleShape,
-                        shadowElevation = 8.dp,
+                        border = BorderStroke(1.5.dp, if (canSend) NeonOrange else TextMuted.copy(alpha = .55f)),
                         modifier = Modifier.align(Alignment.CenterEnd).size(48.dp)
                     ) {
                         IconButton(onClick = onSend, enabled = canSend) {
-                            Icon(Icons.Default.Send, "ارسال", tint = if (canSend) Color.Black else TextMuted)
+                            Icon(Icons.Default.ArrowUpward, "ارسال", tint = if (canSend) NeonOrange else TextMuted)
                         }
                     }
                 }
@@ -952,15 +1019,18 @@ private val CODEIN_CONNECTION_PROBE = """
 private val CODEIN_JS_BRIDGE = """
 (function() {
   if (window.CodeinNativeSend) return;
-  window.CodeinNativeSend = async function(messagesJson, model, template) {
+  window.CodeinNativeSend = async function(messagesJson, model, template, systemPrompt) {
     try {
       CodeinBridge.started();
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'Accept': 'text/event-stream'},
-        body: JSON.stringify({messages: JSON.parse(messagesJson), model: model, template: template})
+        body: JSON.stringify({messages: JSON.parse(messagesJson), model: model, template: template, system: systemPrompt})
       });
-      if (!response.ok) throw new Error('HTTP ' + response.status);
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error('HTTP ' + response.status + (detail ? ': ' + detail.slice(0, 120) : ''));
+      }
       if (!response.body) throw new Error('پاسخی از سرویس دریافت نشد');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
