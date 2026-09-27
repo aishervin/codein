@@ -12,20 +12,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.RecordVoiceOver
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -46,104 +37,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import com.example.ui.theme.NeonOrange
-
-data class CodeinPrompt(
-    val title: String,
-    val subtitle: String,
-    val prompt: String,
-    val icon: ImageVector
-)
-
-val CodeinPrompts = listOf(
-    CodeinPrompt(
-        "دستیار فارسی",
-        "پاسخ‌های روان و ساختاریافته به فارسی",
-        "به فارسی روان، دقیق و ساختاریافته پاسخ بده.",
-        Icons.Default.Translate
-    ),
-    CodeinPrompt(
-        "معمار نرم‌افزار",
-        "کد تمیز، قابل نگهداری و آماده تولید",
-        "مثل یک معمار ارشد نرم‌افزار پاسخ بده؛ راهکارهای عملی، امن و آماده تولید ارائه کن.",
-        Icons.Default.Code
-    ),
-    CodeinPrompt(
-        "تفکر عمیق",
-        "تحلیل مرحله‌به‌مرحله و چندجانبه",
-        "مسئله را از اصول پایه تحلیل کن، فرض‌ها و راه‌حل‌های جایگزین را هم بررسی کن.",
-        Icons.Default.Psychology
-    ),
-    CodeinPrompt(
-        "خلاق و داستان‌گو",
-        "ایده‌پردازی، روایت و متن زنده",
-        "خلاقانه، تصویری و با جزئیات مناسب پاسخ بده.",
-        Icons.Default.RecordVoiceOver
-    ),
-    CodeinPrompt(
-        "ایده‌پرداز",
-        "پاسخ‌های سریع برای شروع پروژه‌های جدید",
-        "چند ایده متفاوت، کاربردی و قابل اجرا پیشنهاد بده.",
-        Icons.Default.AutoAwesome
-    ),
-    CodeinPrompt(
-        "تحلیل امنیت",
-        "تهدیدشناسی و راهکارهای دفاعی",
-        "از دید دفاعی، ریسک‌ها را شناسایی و راهکارهای ایمن‌سازی پیشنهاد کن.",
-        Icons.Default.Security
-    )
-)
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PromptStudioSheet(
-    sheetState: SheetState,
-    onDismiss: () -> Unit,
-    onSelect: (CodeinPrompt) -> Unit
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-            SheetTitle(Icons.Default.AutoAwesome, "استودیو پرامپت", "پروفایل آماده برای شروع سریع")
-            Spacer(Modifier.height(14.dp))
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.padding(bottom = 28.dp)
-            ) {
-                items(CodeinPrompts) { item ->
-                    PromptCard(item = item, onClick = { onSelect(item) })
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PromptCard(item: CodeinPrompt, onClick: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(16.dp),
-        shadowElevation = 8.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(14.dp)
-        ) {
-            Icon(item.icon, contentDescription = null, tint = NeonOrange, modifier = Modifier.size(23.dp))
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(item.title, fontWeight = FontWeight.Bold)
-                Text(item.subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-            }
-            Icon(Icons.Default.ContentCopy, contentDescription = "انتخاب", tint = NeonOrange, modifier = Modifier.size(18.dp))
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
