@@ -17,65 +17,56 @@
 
 <p dir="ltr" align="center">
   <a href="https://github.com/aishervin/codein/releases"><img src="https://img.shields.io/github/v/release/aishervin/codein?display_name=tag&style=flat-square&color=ff7a00" alt="Latest release" /></a>
-  <a href="https://github.com/aishervin/codein/actions/workflows/android-release.yml"><img src="https://img.shields.io/github/actions/workflow/status/aishervin/codein/android-release.yml?style=flat-square&label=build" alt="Build status" /></a>
+  <a href="https://github.com/aishervin/codein/actions/workflows/android-release.yml"><img src="https://img.shields.io/github/actions/workflow/status/aishervin/codein/android-release.yml?style=flat-square&label=checks" alt="Checks status" /></a>
   <img src="https://img.shields.io/badge/Android-7.0%2B-3ddc84?style=flat-square" alt="Android 7.0+" />
 </p>
 
-<div dir="rtl" align="right">
+<h2 dir="rtl" align="right">درباره‌ی پروژه</h2>
 
-## درباره‌ی پروژه
+<p dir="rtl" align="right"><bdi dir="ltr">Codein</bdi> یک کلاینت اندرویدی مستقل با هویت <bdi dir="ltr">SHΞN™</bdi> است؛ برای وقتی که می‌خواهید بدون شلوغی، سریع وارد گفتگو شوید و ایده‌تان را به نتیجه نزدیک کنید.</p>
 
-<bdi dir="ltr">Codein</bdi> یک کلاینت اندرویدی مستقل با هویت <bdi dir="ltr">SHΞN™</bdi> است؛ برای وقتی که می‌خواهید بدون شلوغی، سریع وارد گفتگو شوید و ایده‌تان را به نتیجه نزدیک کنید.
+<p dir="rtl" align="right">تمرکز پروژه روی یک تجربه‌ی تمیز و جدی است: صفحه‌ای آرام برای فکرکردن، نوشتن، بررسی مسئله و کار با کد.</p>
 
-تمرکز پروژه روی یک تجربه‌ی تمیز و جدی است: صفحه‌ای آرام برای فکرکردن، نوشتن، بررسی مسئله و کار با کد.
+<h2 dir="rtl" align="right">امکانات</h2>
 
-## امکانات
+<h3 dir="rtl" align="right">گفتگوی زنده و روان</h3>
+<p dir="rtl" align="right">پاسخ‌ها هنگام آماده‌شدن نمایش داده می‌شوند تا جریان گفتگو قطع نشود و لازم نباشد برای دیدن نتیجه منتظر بمانید.</p>
 
-### گفتگوی زنده و روان
+<h3 dir="rtl" align="right">انتخاب حالت گفتگو</h3>
+<p dir="rtl" align="right">از بین دو حالت <bdi dir="ltr"><code>ZERO</code></bdi> و <bdi dir="ltr"><code>PRO</code></bdi> انتخاب کنید؛ کنترل مدل با لمس و حرکت عمودی در دسترس است.</p>
 
-پاسخ‌ها هنگام آماده‌شدن نمایش داده می‌شوند تا جریان گفتگو قطع نشود و لازم نباشد برای دیدن نتیجه منتظر بمانید.
+<h3 dir="rtl" align="right">ابزارهای کدنویسی</h3>
+<ul dir="rtl" align="right">
+  <li>نمایش خوانای کد با رنگ‌بندی سبک و قاب نارنجی اختصاصی</li>
+  <li>کپی سریع متن و کد</li>
+  <li>دانلود کد با نام فایل متناسب با زبان</li>
+  <li>تلاش دوباره برای پیام‌های قبلی</li>
+  <li>افزودن فایل‌های متنی تا حجم یک مگابایت</li>
+</ul>
 
-### انتخاب حالت گفتگو
+<h3 dir="rtl" align="right">طراحی اختصاصی</h3>
+<p dir="rtl" align="right">پس‌زمینه‌ی تیره، سطوح نرم، جزئیات نارنجی، لوگوی متحرک و وضعیت اتصال زنده، ظاهر <bdi dir="ltr">Codein</bdi> را از یک صفحه‌ی گفتگوی معمولی جدا می‌کند.</p>
 
-از بین دو حالت <bdi dir="ltr"><code>ZERO</code></bdi> و <bdi dir="ltr"><code>PRO</code></bdi> انتخاب کنید؛ کنترل مدل با لمس و حرکت عمودی در دسترس است.
+<h3 dir="rtl" align="right">مدیریت جلسه</h3>
+<p dir="rtl" align="right">در بخش تنظیمات می‌توانید گفتگوی تازه شروع کنید، اطلاعات جلسه را پاک کنید و وضعیت سرویس را ببینید.</p>
 
-### ابزارهای کدنویسی
+<h2 dir="rtl" align="right">نصب و استفاده</h2>
 
-- نمایش خوانای کد با رنگ‌بندی سبک و قاب نارنجی اختصاصی
-- کپی سریع متن و کد
-- دانلود کد با نام فایل متناسب با زبان
-- تلاش دوباره برای پیام‌های قبلی
-- افزودن فایل‌های متنی تا حجم یک مگابایت
+<p dir="rtl" align="right">نسخه‌ی رسمی را از صفحه‌ی دانلود دریافت کنید:</p>
 
-### طراحی اختصاصی
-
-پس‌زمینه‌ی تیره، سطوح نرم، جزئیات نارنجی، لوگوی متحرک و وضعیت اتصال زنده، ظاهر <bdi dir="ltr">Codein</bdi> را از یک صفحه‌ی گفتگوی معمولی جدا می‌کند.
-
-### مدیریت جلسه
-
-در بخش تنظیمات می‌توانید گفتگوی تازه شروع کنید، اطلاعات جلسه را پاک کنید و وضعیت سرویس را ببینید.
-
-## نصب و استفاده
-
-نسخه‌ی رسمی را از صفحه‌ی دانلود دریافت کنید:
-
-<p dir="ltr" align="center">
+<p dir="rtl" align="center">
   <a href="https://github.com/aishervin/codein/releases"><strong>دانلود آخرین نسخه‌ی CODΞiN™</strong></a>
 </p>
 
-<bdi dir="ltr">Codein</bdi> روی <bdi dir="ltr"><code>Android 7.0</code></bdi> و نسخه‌های جدیدتر اجرا می‌شود. بعد از اجرای برنامه، صبر کنید وضعیت اتصال آماده شود؛ سپس از composer پایین صفحه برای شروع گفتگو استفاده کنید.
+<p dir="rtl" align="right"><bdi dir="ltr">Codein</bdi> روی <bdi dir="ltr"><code>Android 7.0</code></bdi> و نسخه‌های جدیدتر اجرا می‌شود. بعد از اجرای برنامه، صبر کنید وضعیت اتصال آماده شود؛ سپس از composer پایین صفحه برای شروع گفتگو استفاده کنید.</p>
 
-برای نصب مستقیم فایل <bdi dir="ltr"><code>APK</code></bdi> ممکن است Android یک هشدار عمومی نمایش دهد، چون برنامه خارج از Google Play توزیع می‌شود. فایل را فقط از release رسمی همین مخزن دریافت کنید.
+<p dir="rtl" align="right">برای نصب مستقیم فایل <bdi dir="ltr"><code>APK</code></bdi> ممکن است Android یک هشدار عمومی نمایش دهد، چون برنامه خارج از Google Play توزیع می‌شود. فایل را فقط از release رسمی همین مخزن دریافت کنید.</p>
 
-## مسیر پروژه
+<h2 dir="rtl" align="right">مسیر پروژه</h2>
+<p dir="rtl" align="right">نسخه‌های آینده روی بهبود تجربه‌ی گفتگو، مدیریت بهتر تاریخچه، حالت‌های بیشتر برای مدل‌ها و ابزارهای کاربردی‌تر برای کار با کد تمرکز خواهند داشت.</p>
 
-نسخه‌های آینده روی بهبود تجربه‌ی گفتگو، مدیریت بهتر تاریخچه، حالت‌های بیشتر برای مدل‌ها و ابزارهای کاربردی‌تر برای کار با کد تمرکز خواهند داشت.
-
-## ارتباط
-
-برای گزارش مشکل، پیشنهاد یا دنبال‌کردن انتشارهای جدید از آیکون‌های بالای صفحه استفاده کنید.
-
-</div>
+<h2 dir="rtl" align="right">ارتباط</h2>
+<p dir="rtl" align="right">برای گزارش مشکل، پیشنهاد یا دنبال‌کردن انتشارهای جدید از آیکون‌های بالای صفحه استفاده کنید.</p>
 
 <br />
 
