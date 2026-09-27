@@ -26,6 +26,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -751,7 +752,7 @@ private fun ProcessingIndicator(compact: Boolean = false) {
         modifier = Modifier.padding(top = if (compact) 7.dp else 1.dp)
     ) {
         SilverText(
-            text = "ѕʜᴇɴ ᴘʀᴏᴄᴇѕѕ...",
+            text = "ѕʜᴇɴ ᴘʀᴏᴄᴇѕѕɪɴɢ...",
             fontSize = if (compact) 9.sp else 11.sp,
             fontWeight = FontWeight.Medium,
             letterSpacing = .45.sp
