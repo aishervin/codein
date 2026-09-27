@@ -33,9 +33,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +45,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
@@ -90,6 +89,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -497,7 +498,7 @@ private fun CodeinHeader(
             Spacer(Modifier.height(5.dp))
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().offset(y = (-8).dp)
             ) {
                 androidx.compose.foundation.Image(
                     painter = painterResource(R.drawable.shen_logo),
@@ -549,7 +550,6 @@ private fun ConnectionStatus(isConnected: Boolean, connectionFailed: Boolean, on
 @Composable
 private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel) -> Unit) {
     var dragDistance by remember { mutableStateOf(0f) }
-    val dragState = rememberDraggableState { delta -> dragDistance += delta }
 
     fun selectNext(direction: Int) {
         val currentIndex = codeinModels.indexOf(selectedModel).coerceAtLeast(0)
@@ -562,19 +562,26 @@ private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel)
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.End,
         modifier = Modifier
-            .draggable(
-                state = dragState,
-                orientation = Orientation.Vertical,
-                onDragStarted = { dragDistance = 0f },
-                onDragStopped = {
-                    if (kotlin.math.abs(dragDistance) > 18f) {
-                        selectNext(if (dragDistance < 0f) 1 else -1)
-                    } else {
-                        dragDistance = 0f
-                    }
-                }
-            )
-            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+            .pointerInput(selectedModel.id) {
+                detectVerticalDragGestures(
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        dragDistance += dragAmount
+                    },
+                    onDragEnd = {
+                        if (kotlin.math.abs(dragDistance) > 18f) {
+                            selectNext(if (dragDistance < 0f) 1 else -1)
+                        } else {
+                            dragDistance = 0f
+                        }
+                    },
+                    onDragCancel = { dragDistance = 0f }
+                )
+            }
+            .clickable {
+                selectNext(1)
+            }
     ) {
         Text(
             "SHΞN™",
@@ -664,24 +671,38 @@ private fun ChatBubble(
                 modifier = Modifier.fillMaxWidth(.94f).animateContentSize()
             ) {
                 Column(Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            horizontalAlignment = if (message.user) Alignment.End else Alignment.Start,
-                            modifier = Modifier.weight(1f)
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                if (message.user) "You" else "SHΞN™",
-                                color = if (message.user) NeonOrangeSoft else NeonOrange,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = if (message.user) TextAlign.End else TextAlign.Start,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            message.attachmentName?.let {
-                                Text("فایل پیوست: $it", color = TextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (message.user) {
+                                Icon(Icons.Default.AttachFile, contentDescription = null, tint = TextMuted, modifier = Modifier.size(17.dp))
+                                Column(horizontalAlignment = Alignment.End, modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "You",
+                                        color = NeonOrangeSoft,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.End,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    message.attachmentName?.let {
+                                        Text("فایل پیوست: $it", color = TextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                            } else {
+                                Text(
+                                    "SHΞN™",
+                                    color = NeonOrange,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Start,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
                         }
-                        if (message.user) Icon(Icons.Default.AttachFile, contentDescription = null, tint = TextMuted, modifier = Modifier.size(17.dp))
                     }
                     Spacer(Modifier.height(7.dp))
                     splitMessage(message.text).forEach { part ->
