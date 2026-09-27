@@ -583,13 +583,16 @@ private fun CodeinHeader(
     onRetry: () -> Unit
 ) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Row(
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
+        ) {
+            Box(Modifier.fillMaxWidth().height(72.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.align(Alignment.CenterStart)
+                ) {
                     IconButton(onClick = onSettings, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Default.Settings, "Settings", tint = TextMuted, modifier = Modifier.size(18.dp))
                     }
@@ -597,25 +600,29 @@ private fun CodeinHeader(
                         Icon(Icons.Default.Add, "New conversation", tint = TextMuted, modifier = Modifier.size(18.dp))
                     }
                 }
-                ModelPicker(selectedModel, onSelectModel)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    androidx.compose.foundation.Image(
+                        painter = painterResource(R.drawable.shen_logo),
+                        contentDescription = "CODΞiN",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(44.dp)
+                    )
+                    SilverText(
+                        text = "CODΞiN™",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = .7.sp
+                    )
+                }
+                Box(Modifier.align(Alignment.CenterEnd)) {
+                    ModelPicker(selectedModel, onSelectModel)
+                }
             }
-            Spacer(Modifier.height(5.dp))
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth().offset(y = (-8).dp)
-            ) {
-                androidx.compose.foundation.Image(
-                    painter = painterResource(R.drawable.shen_logo),
-                    contentDescription = "CODΞiN",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(58.dp)
-                )
-                SilverText(
-                    text = "CODΞiN™",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = .8.sp
-                )
+            Box(Modifier.fillMaxWidth().offset(y = (-3).dp), contentAlignment = Alignment.Center) {
                 ConnectionStatus(isConnected, connectionFailed, onRetry)
             }
         }
