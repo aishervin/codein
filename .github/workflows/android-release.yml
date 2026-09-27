@@ -6,7 +6,7 @@ on:
       release_tag:
         description: "Release tag, for example v1.0.0"
         required: true
-        default: "v1.0.0"
+        default: "v1.0.1"
         type: string
       version_name:
         description: "Android versionName; leave empty to derive it from the tag"
@@ -16,7 +16,7 @@ on:
       version_code:
         description: "Integer versionCode; must increase for every update"
         required: true
-        default: "9"
+        default: "10"
         type: string
       prerelease:
         description: "Mark the GitHub Release as a pre-release"
@@ -111,13 +111,13 @@ jobs:
 
       - name: Rename release APK
         shell: bash
-        run: mv app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/Codein-1.0.0-Universal.apk
+        run: mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/Codein-${{ steps.release.outputs.version_name }}-Universal.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: codein-${{ steps.release.outputs.tag }}
-          path: app/build/outputs/apk/release/Codein-1.0.0-Universal.apk
+          path: app/build/outputs/apk/release/Codein-${{ steps.release.outputs.version_name }}-Universal.apk
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -127,4 +127,4 @@ jobs:
           name: Codein ${{ steps.release.outputs.tag }}
           generate_release_notes: true
           prerelease: ${{ inputs.prerelease || false }}
-          files: app/build/outputs/apk/release/Codein-1.0.0-Universal.apk
+          files: app/build/outputs/apk/release/Codein-${{ steps.release.outputs.version_name }}-Universal.apk

@@ -323,8 +323,10 @@ private fun MainChatScreen(
 
     bridge.onStarted = { isStreaming = true }
     bridge.onConnection = { connected ->
-        isConnected = connected
-        if (connected) connectionFailed = false
+        if (connected) {
+            isConnected = true
+            connectionFailed = false
+        }
     }
     bridge.onToken = { activeAnswer += it }
     bridge.onFinished = {
@@ -371,20 +373,9 @@ private fun MainChatScreen(
 
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     view?.evaluateJavascript(CODEIN_JS_BRIDGE, null)
-                                    fun probeConnection(attempt: Int) {
-                                        val target = view ?: return
-                                        target.evaluateJavascript(CODEIN_CONNECTION_PROBE, null)
-                                        if (attempt < 20) {
-                                            target.postDelayed({
-                                                if (!isConnected) probeConnection(attempt + 1)
-                                            }, 400L)
-                                        } else {
-                                            target.postDelayed({
-                                                if (!isConnected) connectionFailed = true
-                                            }, 500L)
-                                        }
-                                    }
-                                    probeConnection(0)
+                                    // The page can be usable while the models probe is challenged.
+                                    isConnected = true
+                                    connectionFailed = false
                                 }
 
                                 override fun onReceivedError(
@@ -508,7 +499,7 @@ private fun MainChatScreen(
                         value = input,
                         onValueChange = { input = it },
                         onSend = ::sendMessage,
-                        enabled = isConnected && !isStreaming,
+                        enabled = !isStreaming,
                         modifier = Modifier.navigationBarsPadding().imePadding(),
                         attachmentName = attachment?.name,
                         onAttach = {
@@ -1090,10 +1081,16 @@ private fun Composer(
                         textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp, textDirection = TextDirection.ContentOrRtl, shadow = SoftTextShadow),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                         maxLines = 6,
-                         modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) onFocus() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp, max = 140.dp)
+                            .onFocusChanged { if (it.isFocused) onFocus() },
                         decorationBox = { innerTextField ->
                             Box(
-                                modifier = Modifier.fillMaxWidth().padding(start = 52.dp, end = 58.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 52.dp, max = 140.dp)
+                                    .padding(start = 52.dp, end = 58.dp),
                                 contentAlignment = Alignment.CenterEnd
                             ) {
                                 if (value.isEmpty()) {
@@ -1230,22 +1227,6 @@ private fun highlightCode(code: String, language: String): AnnotatedString {
         if (cursor < code.length) append(code.substring(cursor))
     }
 }
-
-private val CODEIN_CONNECTION_PROBE = """
-(async function() {
-  try {
-    const response = await fetch('/api/models', {headers: {'Accept': 'application/json'}});
-    if (!response.ok) {
-      CodeinBridge.connection('false');
-      return;
-    }
-    const payload = await response.json();
-    CodeinBridge.connection(Array.isArray(payload.data) && payload.data.length > 0 ? 'true' : 'false');
-  } catch (_) {
-    CodeinBridge.connection('false');
-  }
-})();
-""".trimIndent()
 
 private val CODEIN_JS_BRIDGE = """
 (function() {
