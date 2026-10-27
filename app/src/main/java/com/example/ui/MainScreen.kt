@@ -72,6 +72,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -144,6 +145,9 @@ private const val CODEIN_CHAT_URL = "https://chat.dphn.ai/"
 private const val CODEIN_STATE_PREFS = "codein_state"
 private const val WARNING_ACKNOWLEDGED_KEY = "warning_acknowledged"
 private const val APP_LOCKED_KEY = "app_locked"
+private const val CHAT_HISTORY_PREFS = "codein_local_chat_history"
+private const val ACTIVE_CHAT_KEY = "active_chat"
+private const val SAVED_CHATS_KEY = "saved_chats"
 
 private data class ChatMessage(
     val user: Boolean,
@@ -151,6 +155,27 @@ private data class ChatMessage(
     val attachmentName: String? = null,
     val requestText: String = text
 )
+
+private fun encodeChatMessages(messages: List<ChatMessage>): JSONArray = JSONArray().apply {
+    messages.forEach { message ->
+        put(JSONObject()
+            .put("user", message.user)
+            .put("text", message.text)
+            .put("attachment", message.attachmentName ?: JSONObject.NULL)
+            .put("request", message.requestText))
+    }
+}
+
+private fun decodeChatMessages(array: JSONArray): List<ChatMessage> =
+    (0 until array.length()).mapNotNull { index ->
+        val item = array.optJSONObject(index) ?: return@mapNotNull null
+        ChatMessage(
+            user = item.optBoolean("user"),
+            text = item.optString("text"),
+            attachmentName = item.optString("attachment").takeIf { it.isNotBlank() && it != "null" },
+            requestText = item.optString("request", item.optString("text"))
+        )
+    }
 
 private data class CodeinAttachment(val name: String, val content: String)
 
@@ -226,8 +251,16 @@ private fun MainChatScreen(
     onLockApp: () -> Unit
 ) {
     var showSafetyWarning by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val chatPrefs = remember(context) { context.getSharedPreferences(CHAT_HISTORY_PREFS, Context.MODE_PRIVATE) }
     val bridge = remember { CodeinChatBridge() }
-    val messages = remember { mutableStateListOf<ChatMessage>() }
+    val messages = remember(chatPrefs) {
+        mutableStateListOf<ChatMessage>().apply {
+            val stored = runCatching { JSONArray(chatPrefs.getString(ACTIVE_CHAT_KEY, "[]")) }.getOrDefault(JSONArray())
+            addAll(decodeChatMessages(stored))
+        }
+    }
+    var showHistory by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     var webView by remember { mutableStateOf<WebView?>(null) }
     var isConnected by remember { mutableStateOf(false) }
@@ -246,7 +279,6 @@ private fun MainChatScreen(
     var pendingCredentialName by remember { mutableStateOf("") }
     var agentToolCalls by remember { mutableStateOf(0) }
     val settingsSheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val context = LocalContext.current
     val agentScope = rememberCoroutineScope()
     val termuxClient = remember(context) { TermuxBridgeClient(context) }
     val focusManager = LocalFocusManager.current
@@ -273,12 +305,35 @@ private fun MainChatScreen(
         }
     }
 
+    fun persistActiveChat() {
+        chatPrefs.edit().putString(ACTIVE_CHAT_KEY, encodeChatMessages(messages).toString()).apply()
+    }
+
+    fun archiveCurrentChat() {
+        if (messages.isNotEmpty()) {
+            val saved = runCatching { JSONArray(chatPrefs.getString(SAVED_CHATS_KEY, "[]")) }.getOrDefault(JSONArray())
+            val title = messages.firstOrNull { it.user }?.text?.take(90)?.ifBlank { null } ?: "گفت‌وگوی بدون عنوان"
+            val entry = JSONObject()
+                .put("id", System.currentTimeMillis().toString())
+                .put("title", title)
+                .put("updated", System.currentTimeMillis())
+                .put("messages", encodeChatMessages(messages))
+            val updated = JSONArray().put(entry)
+            for (index in 0 until minOf(saved.length(), 29)) {
+                saved.optJSONObject(index)?.let { updated.put(it) }
+            }
+            chatPrefs.edit().putString(SAVED_CHATS_KEY, updated.toString()).apply()
+        }
+    }
+
     fun clearChat() {
+        archiveCurrentChat()
         messages.clear()
         activeAnswer = ""
         input = ""
         attachment = null
         isStreaming = false
+        persistActiveChat()
     }
 
     fun copyToClipboard(text: String) {
@@ -508,6 +563,10 @@ private fun MainChatScreen(
         messages.add(ChatMessage(user = false, text = "Service connection error: $it"))
     }
 
+    LaunchedEffect(messages.size, messages.lastOrNull()?.text, activeAnswer.length, isStreaming) {
+        persistActiveChat()
+    }
+
     LaunchedEffect(messages.size, activeAnswer.length, isStreaming) {
         if (messages.isNotEmpty() || activeAnswer.isNotEmpty()) {
             val lastItem = messages.size - 1 + if (activeAnswer.isNotEmpty()) 1 else 0
@@ -574,6 +633,7 @@ private fun MainChatScreen(
                         selectedModel = selectedModel,
                         onSelectModel = { selectedModel = it },
                         onNewChat = ::clearChat,
+                        onHistory = { showHistory = true },
                         onSettings = { showSettings = true },
                         onTermux = { showTermuxRoom = true },
                         isConnected = isConnected,
@@ -721,6 +781,32 @@ private fun MainChatScreen(
         TermuxAgentRoomDialog(onDismiss = { showTermuxRoom = false }, onRoomContextLoaded = { sharedRoomContext = it.toString() })
     }
 
+    if (showHistory) {
+        CodeinHistoryDialog(
+            preferences = chatPrefs,
+            onDismiss = { showHistory = false },
+            onOpen = { entry ->
+                messages.clear()
+                messages.addAll(decodeChatMessages(entry.optJSONArray("messages") ?: JSONArray()))
+                activeAnswer = ""
+                attachment = null
+                input = ""
+                isStreaming = false
+                persistActiveChat()
+                showHistory = false
+            },
+            onDelete = { entryId ->
+                val stored = runCatching { JSONArray(chatPrefs.getString(SAVED_CHATS_KEY, "[]")) }.getOrDefault(JSONArray())
+                val kept = JSONArray()
+                for (index in 0 until stored.length()) {
+                    val item = stored.optJSONObject(index) ?: continue
+                    if (item.optString("id") != entryId) kept.put(item)
+                }
+                chatPrefs.edit().putString(SAVED_CHATS_KEY, kept.toString()).apply()
+            }
+        )
+    }
+
     if (showSettings) {
         CodeinSettingsSheet(
             sheetState = settingsSheetState,
@@ -749,6 +835,7 @@ private fun CodeinHeader(
     selectedModel: CodeinModel,
     onSelectModel: (CodeinModel) -> Unit,
     onNewChat: () -> Unit,
+    onHistory: () -> Unit,
     onSettings: () -> Unit,
     onTermux: () -> Unit,
     isConnected: Boolean,
@@ -771,6 +858,9 @@ private fun CodeinHeader(
                     }
                     IconButton(onClick = onTermux, modifier = Modifier.size(34.dp)) {
                         Text(">_", color = NeonOrangeSoft, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = onHistory, modifier = Modifier.size(34.dp)) {
+                        Icon(Icons.Default.History, "Chat history", tint = TextMuted, modifier = Modifier.size(18.dp))
                     }
                     IconButton(onClick = onNewChat, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Default.Add, "New conversation", tint = TextMuted, modifier = Modifier.size(18.dp))
@@ -1455,6 +1545,55 @@ private val CODEIN_JS_BRIDGE = """
 
 
 @OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CodeinHistoryDialog(
+    preferences: android.content.SharedPreferences,
+    onDismiss: () -> Unit,
+    onOpen: (JSONObject) -> Unit,
+    onDelete: (String) -> Unit
+) {
+    val entries = remember {
+        val stored = runCatching { JSONArray(preferences.getString(SAVED_CHATS_KEY, "[]")) }.getOrDefault(JSONArray())
+        (0 until stored.length()).mapNotNull { stored.optJSONObject(it) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("تاریخچهٔ گفتگوها") },
+        text = {
+            if (entries.isEmpty()) {
+                Text("هنوز گفت‌وگوی ذخیره‌شده‌ای وجود ندارد. با زدن دکمهٔ گفت‌وگوی جدید، جلسهٔ فعلی در این فهرست ذخیره می‌شود.")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(entries, key = { it.optString("id") }) { entry ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(8.dp)
+                            ) {
+                                Column(Modifier.weight(1f).clickable { onOpen(entry) }.padding(4.dp)) {
+                                    Text(entry.optString("title", "گفت‌وگو"), fontWeight = FontWeight.SemiBold, maxLines = 2)
+                                    Text("${decodeChatMessages(entry.optJSONArray("messages") ?: JSONArray()).size} پیام", color = TextMuted, fontSize = 11.sp)
+                                }
+                                TextButton(onClick = { onDelete(entry.optString("id")) }) { Text("حذف") }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("بستن") } },
+        containerColor = MaterialTheme.colorScheme.surface
+    )
+}
+
 @Composable
 private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (JSONObject) -> Unit) {
     val context = LocalContext.current
