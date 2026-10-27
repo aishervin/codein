@@ -362,7 +362,7 @@ private fun MainChatScreen(
         attachmentName: String?,
         history: List<ChatMessage>
     ) {
-        if (isStreaming || !isConnected) return
+        if (isStreaming || (!isConnected && sharedRoomContext.isBlank())) return
         val requestMessages = JSONArray()
         history.forEach { message ->
             requestMessages.put(
@@ -426,7 +426,7 @@ private fun MainChatScreen(
     fun sendMessage() {
         val text = input.trim()
         val selectedAttachment = attachment
-        if ((text.isEmpty() && selectedAttachment == null) || isStreaming || !isConnected) return
+        if ((text.isEmpty() && selectedAttachment == null) || isStreaming || (!isConnected && sharedRoomContext.isBlank())) return
         if (pendingCredentialName.isNotBlank() && selectedAttachment == null) {
             val name = pendingCredentialName
             pendingCredentialName = ""
