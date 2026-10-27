@@ -71,6 +71,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -78,6 +79,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -88,6 +91,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -130,6 +134,8 @@ import com.example.ui.theme.TextMuted
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import com.example.termux.TermuxBridgeClient
 
 private const val CODEIN_CHAT_URL = "https://chat.dphn.ai/"
 private const val CODEIN_STATE_PREFS = "codein_state"
@@ -218,13 +224,20 @@ private fun MainChatScreen(
     var connectionFailed by remember { mutableStateOf(false) }
     var isStreaming by remember { mutableStateOf(false) }
     var activeAnswer by remember { mutableStateOf("") }
+    var rawModelAnswer by remember { mutableStateOf("") }
+    var suppressDirectiveOutput by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
     var attachment by remember { mutableStateOf<CodeinAttachment?>(null) }
     var pendingDownload by remember { mutableStateOf<DownloadPayload?>(null) }
     var selectedModel by remember { mutableStateOf(codeinModels.first()) }
     var showSettings by remember { mutableStateOf(false) }
+    var showTermuxRoom by remember { mutableStateOf(false) }
+    var sharedRoomContext by remember { mutableStateOf("") }
+    var agentToolCalls by remember { mutableStateOf(0) }
     val settingsSheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
+    val agentScope = rememberCoroutineScope()
+    val termuxClient = remember(context) { TermuxBridgeClient(context) }
     val focusManager = LocalFocusManager.current
 
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -286,6 +299,8 @@ private fun MainChatScreen(
         requestMessages.put(JSONObject().put("role", "user").put("content", requestText))
         messages.add(ChatMessage(user = true, text = displayText, attachmentName = attachmentName, requestText = requestText))
         activeAnswer = ""
+        rawModelAnswer = ""
+        suppressDirectiveOutput = false
         isStreaming = true
         val target = webView
         if (target == null) {
@@ -293,10 +308,11 @@ private fun MainChatScreen(
             messages.add(ChatMessage(user = false, text = "Internal connection is not ready. Try again."))
             return
         }
+        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
         val script = "if (typeof window.CodeinNativeSend === 'function') " +
             "window.CodeinNativeSend(${JSONObject.quote(requestMessages.toString())}," +
             "${JSONObject.quote(selectedModel.id)},${JSONObject.quote("logical")}," +
-            "${JSONObject.quote(SHEN_SYSTEM_PROMPT)});" +
+            "${JSONObject.quote(effectiveSystemPrompt)});" +
             " else CodeinBridge.error('Internal bridge is not ready');"
         target.evaluateJavascript(script, null)
     }
@@ -309,6 +325,7 @@ private fun MainChatScreen(
         val displayText = text.ifEmpty { "File: ${selectedAttachment?.name}" }
         input = ""
         attachment = null
+        agentToolCalls = 0
         sendRequest(displayText, requestText, selectedAttachment?.name, messages.toList())
     }
 
@@ -328,11 +345,102 @@ private fun MainChatScreen(
             connectionFailed = false
         }
     }
-    bridge.onToken = { activeAnswer += it }
+    bridge.onToken = {
+        rawModelAnswer = (rawModelAnswer + it).takeLast(200000)
+        if (!suppressDirectiveOutput) {
+            activeAnswer += it
+            if (activeAnswer.contains("[[CODEIN_TERMUX_EXEC]]") || activeAnswer.contains("[[CODEIN_SAVE_KEY")) {
+                suppressDirectiveOutput = true
+                activeAnswer = ""
+            }
+        }
+    }
     bridge.onFinished = {
-        if (activeAnswer.isNotBlank()) messages.add(ChatMessage(user = false, text = activeAnswer))
-        activeAnswer = ""
-        isStreaming = false
+        val response = rawModelAnswer.ifBlank { activeAnswer }
+        rawModelAnswer = ""
+        val keyMatch = Regex("""\[\[CODEIN_SAVE_KEY\s+([A-Za-z0-9._-]+)\]\]([\s\S]*?)\[\[/CODEIN_SAVE_KEY\]\]""").find(response)
+        val toolMatch = Regex("""\[\[CODEIN_TERMUX_EXEC\]\]([\s\S]*?)\[\[/CODEIN_TERMUX_EXEC\]\]""").find(response)
+        if (keyMatch != null && keyMatch.groupValues[2].isNotBlank() && sharedRoomContext.isNotBlank()) {
+            val name = keyMatch.groupValues[1].trim()
+            val secret = keyMatch.groupValues[2].trim()
+            activeAnswer = ""
+            isStreaming = false
+            messages.indices.forEach { index ->
+                val item = messages[index]
+                if (item.user && (item.text.contains(secret) || item.requestText.contains(secret))) {
+                    messages[index] = item.copy(
+                        text = item.text.replace(secret, "[credential saved locally]"),
+                        requestText = item.requestText.replace(secret, "[credential saved locally]")
+                    )
+                }
+            }
+            messages.add(ChatMessage(user = false, text = "Saving $name to the local Termux vault…"))
+            agentScope.launch {
+                val saved = runCatching { termuxClient.saveCredential(name, secret) }
+                if (saved.isSuccess) {
+                    runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
+                    sendRequest("Credential saved", "Credential " + name + " is saved in the local vault. Continue the original task without repeating or revealing its value.", null, messages.toList())
+                } else {
+                    messages.add(ChatMessage(user = false, text = "Could not save credential locally: " + (saved.exceptionOrNull()?.message ?: "unknown error")))
+                    isStreaming = false
+                }
+            }
+        } else if (toolMatch != null && sharedRoomContext.isNotBlank() && agentToolCalls < 12) {
+            val command = toolMatch.groupValues[1].trim()
+            activeAnswer = ""
+            isStreaming = false
+            agentToolCalls += 1
+            messages.add(ChatMessage(user = false, text = "⚙ Executing in Termux…"))
+            agentScope.launch {
+                val execution = runCatching { termuxClient.execute(command) }
+                if (execution.isSuccess) {
+                    val result = execution.getOrThrow()
+                    runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
+                    val toolResult = buildString {
+                        append("Termux execution result (exit code ")
+                        append(result.optInt("exit_code", -1))
+                        append("):\n")
+                        append(result.optString("stdout").takeLast(10000))
+                        if (result.optString("stderr").isNotBlank()) {
+                            append("\nSTDERR:\n")
+                            append(result.optString("stderr").takeLast(4000))
+                        }
+                        if (result.has("error")) append("\nERROR: ").append(result.optString("error"))
+                        append("\nContinue the original task using this result. Do not repeat successful work.")
+                    }
+                    sendRequest("Termux tool result", toolResult, null, messages.toList())
+                } else {
+                    messages.add(ChatMessage(user = false, text = "Termux execution failed: " + (execution.exceptionOrNull()?.message ?: "unknown error")))
+                    isStreaming = false
+                }
+            }
+        } else {
+            if (response.isNotBlank()) {
+                messages.add(ChatMessage(user = false, text = response))
+                if (sharedRoomContext.isNotBlank()) {
+                    val taskTitle = messages.lastOrNull { it.user && it.text != "Termux tool result" }?.text?.take(120) ?: "Codein session"
+                    agentScope.launch {
+                        runCatching {
+                            termuxClient.saveSession(
+                                "session-" + System.currentTimeMillis(),
+                                taskTitle,
+                                response.takeLast(6000),
+                                "Resume from the latest saved Agent Room context"
+                            )
+                            termuxClient.updateState(
+                                JSONObject()
+                                    .put("last_task", taskTitle)
+                                    .put("recent_changes", JSONArray().put("Assistant completed: " + taskTitle))
+                            )
+                            termuxClient.recordEvent("assistant_turn_completed", taskTitle)
+                            termuxClient.roomContext()
+                        }.getOrNull()?.let { sharedRoomContext = it.toString() }
+                    }
+                }
+            }
+            activeAnswer = ""
+            isStreaming = false
+        }
     }
     bridge.onError = {
         if (activeAnswer.isNotBlank()) messages.add(ChatMessage(user = false, text = activeAnswer))
@@ -408,6 +516,7 @@ private fun MainChatScreen(
                         onSelectModel = { selectedModel = it },
                         onNewChat = ::clearChat,
                         onSettings = { showSettings = true },
+                        onTermux = { showTermuxRoom = true },
                         isConnected = isConnected,
                         connectionFailed = connectionFailed,
                         onRetry = {
@@ -549,6 +658,10 @@ private fun MainChatScreen(
 
     }
 
+    if (showTermuxRoom) {
+        TermuxAgentRoomDialog(onDismiss = { showTermuxRoom = false }, onRoomContextLoaded = { sharedRoomContext = it.toString() })
+    }
+
     if (showSettings) {
         CodeinSettingsSheet(
             sheetState = settingsSheetState,
@@ -578,6 +691,7 @@ private fun CodeinHeader(
     onSelectModel: (CodeinModel) -> Unit,
     onNewChat: () -> Unit,
     onSettings: () -> Unit,
+    onTermux: () -> Unit,
     isConnected: Boolean,
     connectionFailed: Boolean,
     onRetry: () -> Unit
@@ -595,6 +709,9 @@ private fun CodeinHeader(
                 ) {
                     IconButton(onClick = onSettings, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Default.Settings, "Settings", tint = TextMuted, modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onTermux, modifier = Modifier.size(34.dp)) {
+                        Text(">_", color = NeonOrangeSoft, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                     IconButton(onClick = onNewChat, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Default.Add, "New conversation", tint = TextMuted, modifier = Modifier.size(18.dp))
@@ -1299,3 +1416,113 @@ private val CODEIN_JS_BRIDGE = """
   };
 })();
 """.trimIndent()
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (JSONObject) -> Unit) {
+    val context = LocalContext.current
+    val client = remember(context) { TermuxBridgeClient(context) }
+    val scope = rememberCoroutineScope()
+    var baseUrl by remember { mutableStateOf(client.baseUrl) }
+    var token by remember { mutableStateOf(client.bearerToken) }
+    var keyName by remember { mutableStateOf("cloudflare_api_token") }
+    var keyValue by remember { mutableStateOf("") }
+    var savedKeys by remember { mutableStateOf(emptyList<String>()) }
+    var command by remember { mutableStateOf("pwd && ls -la") }
+    var status by remember { mutableStateOf("Termux bridge not connected") }
+    var output by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("TERMUX AGENT ROOM", fontWeight = FontWeight.ExtraBold)
+                Text("Shared local workspace · credentials · terminal", color = TextMuted, fontSize = 12.sp)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                Text(status, color = if (status.startsWith("Connected")) Color(0xFF4DDB8A) else NeonOrangeSoft, fontSize = 12.sp)
+                OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("Termux bridge URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("Local bridge token") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(enabled = !busy, onClick = {
+                        busy = true
+                        client.baseUrl = baseUrl
+                        client.bearerToken = token
+                        scope.launch {
+                            runCatching {
+                                val health = client.health()
+                                val room = client.roomContext()
+                                val names = client.credentialNames()
+                                Triple(health, room, names)
+                            }
+                                .onSuccess {
+                                    status = "Connected · " + it.first.optString("service", "Termux")
+                                    savedKeys = it.third
+                                    onRoomContextLoaded(it.second)
+                                    output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
+                                        "\\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" })
+                                }
+                                .onFailure { status = "Connection failed: " + (it.message ?: "unknown error") }
+                            busy = false
+                        }
+                    }) { Text(if (busy) "Connecting…" else "Connect") }
+                    TextButton(onClick = {
+                        output = "Run inside Termux:\npkg install -y curl\ncurl -fsSL https://raw.githubusercontent.com/aishervin/codein/feature/termux-agent-room/termux/codein-bootstrap.sh | bash\npython ~/.codein/server.py"
+                    }) { Text("Setup command") }
+                }
+                Text("LOCAL KEY VAULT", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("Saved: " + savedKeys.joinToString().ifBlank { "connect to load keys" }, color = TextMuted, fontSize = 11.sp)
+                OutlinedTextField(value = keyName, onValueChange = { keyName = it }, label = { Text("Credential name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = keyValue, onValueChange = { keyValue = it }, label = { Text("API token / secret") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Button(
+                    enabled = !busy && keyName.isNotBlank() && keyValue.isNotBlank(),
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            runCatching { client.saveCredential(keyName, keyValue) }
+                                .onSuccess { keyValue = ""; savedKeys = (savedKeys + keyName).distinct(); scope.launch { runCatching { client.roomContext() }.onSuccess { onRoomContextLoaded(it) } }; output = "Saved locally in Termux vault as: " + keyName; status = "Connected · credential saved" }
+                                .onFailure { status = "Save failed: " + (it.message ?: "unknown error") }
+                            busy = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Save credential to shared vault") }
+                Text("TERMINAL", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("Termux command") }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 3)
+                Button(
+                    enabled = !busy && command.isNotBlank(),
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            runCatching { client.execute(command) }
+                                .onSuccess {
+                                    output = it.optString("stdout") + if (it.optString("stderr").isNotBlank()) "\n" + it.optString("stderr") else ""
+                                    if (output.isBlank()) output = "Exit code: " + it.optInt("exit_code")
+                                    status = "Connected · exit " + it.optInt("exit_code", -1)
+                                }
+                                .onFailure { status = "Command failed: " + (it.message ?: "unknown error") }
+                            busy = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (busy) "Working…" else "Run in Termux") }
+                if (output.isNotBlank()) {
+                    Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                        Text(output.takeLast(5000), color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface
+    )
+}
