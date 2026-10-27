@@ -67,6 +67,8 @@ class TermuxBridgeClient(context: Context) {
     suspend fun recordEvent(kind: String, summary: String): JSONObject =
         request("POST", "/api/events", JSONObject().put("kind", kind).put("data", JSONObject().put("summary", summary)))
 
+    suspend fun updateState(fields: JSONObject): JSONObject = request("POST", "/api/state", fields)
+
     private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject =
         withContext(Dispatchers.IO) {
             check(bearerToken.isNotBlank()) { "Termux bridge token is missing. Start the Termux bridge and enter its token in Codein Settings." }
