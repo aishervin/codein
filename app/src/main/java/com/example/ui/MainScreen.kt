@@ -356,7 +356,8 @@ private fun MainChatScreen(
         }
     }
     bridge.onFinished = {
-        val response = activeAnswer
+        val response = rawModelAnswer.ifBlank { activeAnswer }
+        rawModelAnswer = ""
         val toolMatch = Regex("""\[\[CODEIN_TERMUX_EXEC\]\]([\s\S]*?)\[\[/CODEIN_TERMUX_EXEC\]\]""").find(response)
         if (toolMatch != null && sharedRoomContext.isNotBlank() && agentToolCalls < 12) {
             val command = toolMatch.groupValues[1].trim()
