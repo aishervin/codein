@@ -22,3 +22,7 @@ Commands execute as the Termux user. Capture exit code, stdout, stderr, and dura
 
 ## Session handoff
 Before yielding to another agent, persist objective/status, changed files, decisions/constraints, commands and tests with exit codes, unresolved work, and the exact next action. This keeps the workspace a shared “thinking room” rather than disconnected chats.
+
+## Native chat handoff
+
+After the Termux Agent Room is connected, Codein includes the compact room snapshot and credential-name index in model context. The active model may request a command with `[[CODEIN_TERMUX_EXEC]]command[[/CODEIN_TERMUX_EXEC]]`; Codein runs it as the Termux user, returns the exit code/stdout/stderr, refreshes room context, and continues the same task. A credential supplied in response to an explicit request can be stored using `[[CODEIN_SAVE_KEY name]]value[[/CODEIN_SAVE_KEY]]`; the UI suppresses the directive, stores the value locally, and redacts it from the visible user message before continuing. Completed turns are persisted as local sessions.
