@@ -100,10 +100,12 @@ def provider_chat(data):
         except Exception: pass
         event("provider_chat_error",{"provider":pid,"model":model,"status":e.code})
         return 502,{"ok":False,"error":"Provider HTTP "+str(e.code),"provider":pid,"model":model,"detail":detail[:3000]}
-    except (URLError,TimeoutError) as e:
-        return 502,{"ok":False,"error":"Provider connection failed","detail":str(e)[:1000]}
+    except (URLError,TimeoutError):
+        # Never echo exception text: URL-bearing errors could include a Gemini API key.
+        return 502,{"ok":False,"error":"Provider connection failed. Check network access and try again."}
     except Exception as e:
-        return 502,{"ok":False,"error":"Provider request failed","detail":str(e)[:1000]}
+        # Exception messages may contain request URLs or payload fragments.
+        return 502,{"ok":False,"error":"Provider request failed","error_type":type(e).__name__}
 
 
 def readj(p, fallback):
