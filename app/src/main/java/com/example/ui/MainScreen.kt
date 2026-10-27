@@ -231,8 +231,11 @@ private fun MainChatScreen(
     var showSettings by remember { mutableStateOf(false) }
     var showTermuxRoom by remember { mutableStateOf(false) }
     var sharedRoomContext by remember { mutableStateOf("") }
+    var agentToolCalls by remember { mutableStateOf(0) }
     val settingsSheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
+    val agentScope = rememberCoroutineScope()
+    val termuxClient = remember(context) { TermuxBridgeClient(context) }
     val focusManager = LocalFocusManager.current
 
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -301,7 +304,7 @@ private fun MainChatScreen(
             messages.add(ChatMessage(user = false, text = "Internal connection is not ready. Try again."))
             return
         }
-        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext
+        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it and save it in the local vault first."
         val script = "if (typeof window.CodeinNativeSend === 'function') " +
             "window.CodeinNativeSend(${JSONObject.quote(requestMessages.toString())}," +
             "${JSONObject.quote(selectedModel.id)},${JSONObject.quote("logical")}," +
@@ -318,6 +321,7 @@ private fun MainChatScreen(
         val displayText = text.ifEmpty { "File: ${selectedAttachment?.name}" }
         input = ""
         attachment = null
+        agentToolCalls = 0
         sendRequest(displayText, requestText, selectedAttachment?.name, messages.toList())
     }
 
