@@ -193,11 +193,18 @@ private data class CodeinModel(
 )
 
 private val codeinModels = listOf(
-    CodeinModel("gemini-3.8-flash", "Gemini Flash", "gemini"),
-    CodeinModel("gpt-6-luna", "GPT", "openai"),
+    CodeinModel("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini"),
+    CodeinModel("gemini-3.7-flash", "Gemini 3.7 Flash", "gemini"),
+    CodeinModel("gemini-3.1-pro-preview", "Gemini 3.1 Pro", "gemini"),
+    CodeinModel("gpt-6-luna", "GPT-6 Luna", "openai"),
+    CodeinModel("gpt-6.1-terra", "GPT-6.1 Terra", "openai"),
     CodeinModel("deepseek-flash", "DeepSeek Flash", "deepseek"),
-    CodeinModel("claude-haiku-4-5-20251001", "Claude Haiku", "anthropic"),
-    CodeinModel("openai/gpt-6-luna", "OpenRouter", "openrouter"),
+    CodeinModel("deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek"),
+    CodeinModel("claude-haiku-4-5-20251001", "Claude Haiku 4.5", "anthropic"),
+    CodeinModel("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic"),
+    CodeinModel("claude-opus-4-8", "Claude Opus 4.8", "anthropic"),
+    CodeinModel("openai/gpt-6-luna", "OpenRouter · GPT", "openrouter"),
+    CodeinModel("deepseek/deepseek-flash", "OpenRouter · DeepSeek", "openrouter"),
     CodeinModel("mistral-small-latest", "Mistral Small", "mistral"),
     CodeinModel("grok-2-latest", "Grok", "xai"),
     CodeinModel("llama-3.3-70b-versatile", "Groq Llama", "groq")
