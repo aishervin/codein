@@ -43,6 +43,12 @@ All requests require `Authorization: Bearer <token>`; POST requests use JSON.
 
 The exec endpoint runs commands as the Termux user, in the shared workspace. It does not grant root or bypass Android storage permission prompts.
 
+## Agent tool flow
+
+When the chat is connected to the Agent Room, the active model can request a local shell operation with the internal `[[CODEIN_TERMUX_EXEC]]...[[/CODEIN_TERMUX_EXEC]]` protocol. Codein runs it as the Termux user, returns stdout/stderr and exit status to the model, and refreshes shared room context. If the user supplies a requested API credential in chat, the app can store it locally through the `[[CODEIN_SAVE_KEY name]]...[[/CODEIN_SAVE_KEY]]` protocol and redact it from visible chat history.
+
+Completed assistant turns are saved as local session summaries and update `state.json` so later model sessions can resume.
+
 ## Integration status
 
 This is the Termux-side foundation. The Android app still needs its UI/runtime wired to connect to this bridge, save the bearer token, and display terminal output. This commit does not claim the current APK already calls these endpoints.
