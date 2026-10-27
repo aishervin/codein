@@ -12,6 +12,8 @@ import java.net.URL
  * Client for the user's own Termux Agent Room.
  * The endpoint and bearer token are stored locally on this device.
  */
+data class TermuxProvider(val id: String, val name: String, val defaultModel: String, val models: List<String>, val configured: Boolean, val credentialName: String)
+
 class TermuxBridgeClient(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("codein_termux_bridge", Context.MODE_PRIVATE)
 
@@ -31,6 +33,31 @@ class TermuxBridgeClient(context: Context) {
 
     /** Loads the shared room contract, state, recent events, sessions, and skills. */
     suspend fun roomContext(): JSONObject = request("GET", "/api/room")
+
+    suspend fun providers(): List<TermuxProvider> {
+        val result = request("GET", "/api/providers")
+        val array = result.optJSONArray("providers") ?: JSONArray()
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val modelsJson = item.optJSONArray("models") ?: JSONArray()
+            TermuxProvider(
+                id = item.optString("id"),
+                name = item.optString("name"),
+                defaultModel = item.optString("default_model"),
+                models = (0 until modelsJson.length()).map { modelsJson.optString(it) },
+                configured = item.optBoolean("configured"),
+                credentialName = item.optString("credential_name")
+            )
+        }
+    }
+
+    suspend fun chat(provider: String, model: String, messages: JSONArray, system: String): JSONObject =
+        request("POST", "/api/chat", JSONObject()
+            .put("provider", provider)
+            .put("model", model)
+            .put("messages", messages)
+            .put("system", system)
+            .put("timeout", 120))
 
     suspend fun credentialNames(): List<String> {
         val result = request("GET", "/api/keys")
