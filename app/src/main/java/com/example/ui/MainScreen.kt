@@ -343,9 +343,41 @@ private fun MainChatScreen(
     }
     bridge.onToken = { activeAnswer += it }
     bridge.onFinished = {
-        if (activeAnswer.isNotBlank()) messages.add(ChatMessage(user = false, text = activeAnswer))
-        activeAnswer = ""
-        isStreaming = false
+        val response = activeAnswer
+        val toolMatch = Regex("""\[\[CODEIN_TERMUX_EXEC\]\]([\s\S]*?)\[\[/CODEIN_TERMUX_EXEC\]\]""").find(response)
+        if (toolMatch != null && sharedRoomContext.isNotBlank() && agentToolCalls < 12) {
+            val command = toolMatch.groupValues[1].trim()
+            activeAnswer = ""
+            isStreaming = false
+            agentToolCalls += 1
+            messages.add(ChatMessage(user = false, text = "⚙ Executing in Termux…"))
+            agentScope.launch {
+                runCatching { termuxClient.execute(command) }
+                    .onSuccess { result ->
+                        val toolResult = buildString {
+                            append("Termux execution result (exit code ")
+                            append(result.optInt("exit_code", -1))
+                            append("):\n")
+                            append(result.optString("stdout").takeLast(10000))
+                            if (result.optString("stderr").isNotBlank()) {
+                                append("\nSTDERR:\n")
+                                append(result.optString("stderr").takeLast(4000))
+                            }
+                            if (result.has("error")) append("\nERROR: ").append(result.optString("error"))
+                            append("\nContinue the original task using this result. Do not repeat successful work.")
+                        }
+                        sendRequest("Termux tool result", toolResult, null, messages.toList())
+                    }
+                    .onFailure {
+                        messages.add(ChatMessage(user = false, text = "Termux execution failed: " + (it.message ?: "unknown error")))
+                        isStreaming = false
+                    }
+            }
+        } else {
+            if (response.isNotBlank()) messages.add(ChatMessage(user = false, text = response))
+            activeAnswer = ""
+            isStreaming = false
+        }
     }
     bridge.onError = {
         if (activeAnswer.isNotBlank()) messages.add(ChatMessage(user = false, text = activeAnswer))
