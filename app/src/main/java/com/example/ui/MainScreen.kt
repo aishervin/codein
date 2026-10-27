@@ -365,6 +365,15 @@ private fun MainChatScreen(
             val secret = keyMatch.groupValues[2].trim()
             activeAnswer = ""
             isStreaming = false
+            messages.indices.forEach { index ->
+                val item = messages[index]
+                if (item.user && (item.text.contains(secret) || item.requestText.contains(secret))) {
+                    messages[index] = item.copy(
+                        text = item.text.replace(secret, "[credential saved locally]"),
+                        requestText = item.requestText.replace(secret, "[credential saved locally]")
+                    )
+                }
+            }
             messages.add(ChatMessage(user = false, text = "Saving $name to the local Termux vault…"))
             agentScope.launch {
                 val saved = runCatching { termuxClient.saveCredential(name, secret) }
