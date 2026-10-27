@@ -161,12 +161,19 @@ private sealed interface MessagePart {
 
 private data class CodeinModel(
     val id: String,
-    val suffix: String
+    val suffix: String,
+    val providerId: String? = null
 )
 
 private val codeinModels = listOf(
-    CodeinModel("dolphinserver2:6b", "ᴢᴇʀᴏ"),
-    CodeinModel("dolphinserver:24B", "ᴘʀᴏ")
+    CodeinModel("gemini-2.5-flash", "Gemini Flash", "gemini"),
+    CodeinModel("gpt-4o-mini", "GPT-4o mini", "openai"),
+    CodeinModel("deepseek-chat", "DeepSeek Chat", "deepseek"),
+    CodeinModel("claude-3-5-haiku-latest", "Claude Haiku", "anthropic"),
+    CodeinModel("openai/gpt-4o-mini", "OpenRouter", "openrouter"),
+    CodeinModel("mistral-small-latest", "Mistral Small", "mistral"),
+    CodeinModel("grok-2-latest", "Grok", "xai"),
+    CodeinModel("llama-3.3-70b-versatile", "Groq Llama", "groq")
 )
 
 private const val MAX_ATTACHMENT_BYTES = 1024 * 1024
@@ -234,6 +241,7 @@ private fun MainChatScreen(
     var showSettings by remember { mutableStateOf(false) }
     var showTermuxRoom by remember { mutableStateOf(false) }
     var sharedRoomContext by remember { mutableStateOf("") }
+    var pendingCredentialName by remember { mutableStateOf("") }
     var agentToolCalls by remember { mutableStateOf(0) }
     val settingsSheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -304,12 +312,42 @@ private fun MainChatScreen(
         suppressDirectiveOutput = false
         isStreaming = true
         val target = webView
+        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
+        if (selectedModel.providerId != null) {
+            if (sharedRoomContext.isBlank()) {
+                isStreaming = false
+                messages.add(ChatMessage(user = false, text = "برای استفاده از ${selectedModel.suffix}، یک‌بار از آیکون >_ پل Termux را راه‌اندازی و متصل کن. بعد از اتصال، درخواست مستقیم به سرویس انتخاب‌شده فرستاده می‌شود."))
+                return
+            }
+            agentScope.launch {
+                runCatching { termuxClient.chat(selectedModel.providerId, selectedModel.id, requestMessages, effectiveSystemPrompt) }
+                    .onSuccess { result ->
+                        val answer = result.optString("content")
+                        messages.add(ChatMessage(user = false, text = answer.ifBlank { "سرویس پاسخ متنی برنگرداند." }))
+                        isStreaming = false
+                        val title = messages.lastOrNull { it.user }?.text?.take(120) ?: "Codein session"
+                        runCatching {
+                            termuxClient.saveSession("session-" + System.currentTimeMillis(), title, answer.takeLast(6000), "Continue this conversation from the local chat history")
+                            termuxClient.recordEvent("assistant_turn_completed", title)
+                        }
+                    }
+                    .onFailure { error ->
+                        if (error is com.example.termux.MissingProviderCredential) {
+                            pendingCredentialName = error.credentialName
+                            messages.add(ChatMessage(user = false, text = "برای استفاده از ${error.providerName} کلید API لازم است. کلید را همین‌جا در چت بفرست؛ برنامه آن را محلی در Termux ذخیره می‌کند و مقدارش را در تاریخچه نشان نمی‌دهد. فقط مقدار کلید را در پیام بعدی بفرست."))
+                        } else {
+                            messages.add(ChatMessage(user = false, text = "خطای سرویس ${selectedModel.suffix}: " + (error.message ?: "خطای نامشخص")))
+                        }
+                        isStreaming = false
+                    }
+            }
+            return
+        }
         if (target == null) {
             isStreaming = false
             messages.add(ChatMessage(user = false, text = "Internal connection is not ready. Try again."))
             return
         }
-        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
         val script = "if (typeof window.CodeinNativeSend === 'function') " +
             "window.CodeinNativeSend(${JSONObject.quote(requestMessages.toString())}," +
             "${JSONObject.quote(selectedModel.id)},${JSONObject.quote("logical")}," +
@@ -322,6 +360,23 @@ private fun MainChatScreen(
         val text = input.trim()
         val selectedAttachment = attachment
         if ((text.isEmpty() && selectedAttachment == null) || isStreaming || !isConnected) return
+        if (pendingCredentialName.isNotBlank() && selectedAttachment == null) {
+            val name = pendingCredentialName
+            pendingCredentialName = ""
+            input = ""
+            agentScope.launch {
+                runCatching { termuxClient.saveCredential(name, text) }
+                    .onSuccess {
+                        runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
+                        sendRequest("کلید سرویس ذخیره شد", "The user supplied the requested API credential. It has been stored in the local Termux vault under the name $name. Continue the previous task; never reveal the key.", null, messages.toList())
+                    }
+                    .onFailure {
+                        pendingCredentialName = name
+                        messages.add(ChatMessage(user = false, text = "ذخیرهٔ کلید انجام نشد: " + (it.message ?: "خطای نامشخص") + "؛ دوباره تلاش کن."))
+                    }
+            }
+            return
+        }
         val requestText = buildRequestContent(text, selectedAttachment)
         val displayText = text.ifEmpty { "File: ${selectedAttachment?.name}" }
         input = ""
