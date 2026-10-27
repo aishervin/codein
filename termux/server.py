@@ -18,11 +18,11 @@ for d in (WORKSPACE,KEYS,EVENTS,SESSIONS,ROOT/"agents",ROOT/"skills",ROOT/"tools
 
 def now(): return datetime.now(timezone.utc).isoformat()
 PROVIDERS = {
-    "gemini": {"name":"Google Gemini","key":"gemini_api_key","base_url":"https://generativelanguage.googleapis.com/v1beta","default_model":"gemini-2.5-flash","kind":"gemini","models":["gemini-2.5-flash","gemini-2.5-pro"]},
-    "openai": {"name":"OpenAI","key":"openai_api_key","base_url":"https://api.openai.com/v1","default_model":"gpt-4o-mini","kind":"openai","models":["gpt-4o-mini","gpt-4.1-mini"]},
-    "deepseek": {"name":"DeepSeek","key":"deepseek_api_key","base_url":"https://api.deepseek.com","default_model":"deepseek-chat","kind":"openai","models":["deepseek-chat","deepseek-reasoner"]},
-    "anthropic": {"name":"Anthropic Claude","key":"anthropic_api_key","base_url":"https://api.anthropic.com/v1","default_model":"claude-3-5-haiku-latest","kind":"anthropic","models":["claude-3-5-haiku-latest"]},
-    "openrouter": {"name":"OpenRouter","key":"openrouter_api_key","base_url":"https://openrouter.ai/api/v1","default_model":"openai/gpt-4o-mini","kind":"openai","models":["openai/gpt-4o-mini","deepseek/deepseek-chat"]},
+    "gemini": {"name":"Google Gemini","key":"gemini_api_key","base_url":"https://generativelanguage.googleapis.com/v1beta","default_model":"gemini-3.8-flash","kind":"gemini","models":["gemini-3.8-flash","gemini-3.7-flash","gemini-3.1-pro-preview"]},
+    "openai": {"name":"OpenAI","key":"openai_api_key","base_url":"https://api.openai.com/v1","default_model":"gpt-6-luna","kind":"openai","models":["gpt-6-luna","gpt-6.1-terra"]},
+    "deepseek": {"name":"DeepSeek","key":"deepseek_api_key","base_url":"https://api.deepseek.com","default_model":"deepseek-flash","kind":"openai","models":["deepseek-flash","deepseek-v4-pro"]},
+    "anthropic": {"name":"Anthropic Claude","key":"anthropic_api_key","base_url":"https://api.anthropic.com/v1","default_model":"claude-haiku-4-5-20251001","kind":"anthropic","models":["claude-haiku-4-5-20251001","claude-sonnet-4-6","claude-opus-4-8"]},
+    "openrouter": {"name":"OpenRouter","key":"openrouter_api_key","base_url":"https://openrouter.ai/api/v1","default_model":"openai/gpt-6-luna","kind":"openai","models":["openai/gpt-6-luna","deepseek/deepseek-flash"]},
     "mistral": {"name":"Mistral","key":"mistral_api_key","base_url":"https://api.mistral.ai/v1","default_model":"mistral-small-latest","kind":"openai","models":["mistral-small-latest"]},
     "xai": {"name":"xAI Grok","key":"xai_api_key","base_url":"https://api.x.ai/v1","default_model":"grok-2-latest","kind":"openai","models":["grok-2-latest"]},
     "groq": {"name":"Groq","key":"groq_api_key","base_url":"https://api.groq.com/openai/v1","default_model":"llama-3.3-70b-versatile","kind":"openai","models":["llama-3.3-70b-versatile"]},
