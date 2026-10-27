@@ -13,6 +13,7 @@ import java.net.URL
  * The endpoint and bearer token are stored locally on this device.
  */
 data class TermuxProvider(val id: String, val name: String, val defaultModel: String, val models: List<String>, val configured: Boolean, val credentialName: String)
+class MissingProviderCredential(val credentialName: String, val providerName: String) : IllegalStateException("Missing API key for $providerName")
 
 class TermuxBridgeClient(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("codein_termux_bridge", Context.MODE_PRIVATE)
@@ -116,8 +117,12 @@ class TermuxBridgeClient(context: Context) {
                 val stream = if (status in 200..299) connection.inputStream else connection.errorStream
                 val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
                 val result = if (text.isBlank()) JSONObject() else JSONObject(text)
+                if (status == 428 && result.optString("error") == "missing_api_key") {
+                    throw MissingProviderCredential(result.optString("credential_name"), result.optString("provider_name"))
+                }
                 if (status !in 200..299) {
-                    throw IllegalStateException(result.optString("error").ifBlank { "Termux bridge returned HTTP $status" })
+                    val detail = result.optString("detail")
+                    throw IllegalStateException(result.optString("error").ifBlank { "Termux bridge returned HTTP $status" } + if (detail.isNotBlank()) ": " + detail.take(500) else "")
                 }
                 result
             } finally {
