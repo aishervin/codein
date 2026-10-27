@@ -38,6 +38,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -1444,7 +1445,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
         },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
                 Text(status, color = if (status.startsWith("Connected") || status.startsWith("متصل")) Color(0xFF4DDB8A) else NeonOrangeSoft, fontSize = 12.sp)
@@ -1474,7 +1475,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                                 .onFailure { status = "اتصال ناموفق: " + (it.message ?: "خطای نامشخص") }
                             busy = false
                         }
-                    }) { Text(if (busy) "Connecting…" else "Connect") }
+                    }) { Text(if (busy) "در حال اتصال…" else "اتصال") }
                     TextButton(onClick = {
                         output = "مراحل راه‌اندازی:\n۱) برنامه Termux را باز کن.\n۲) این دستور را اجرا کن:\ncurl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash\n۳) پل محلی را اجرا کن:\npython ~/.codein/server.py\n۴) در نشست جداگانه Termux، توکن را از فایل زیر بخوان و در همین صفحه وارد کن:\ncat ~/.codein/config.json\n۵) برگرد و «اتصال» را بزن. تا وقتی سرور در Termux اجراست، این صفحه می‌تواند به آن وصل شود."
                     }) { Text("راهنمای راه‌اندازی") }
@@ -1495,12 +1496,12 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                 OutlinedTextField(value = keyName, onValueChange = { keyName = it }, label = { Text("نام کلید (قابل ویرایش)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = keyValue, onValueChange = { keyValue = it }, label = { Text("مقدار کلید / توکن سرویس") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Button(
-                    enabled = !busy && keyName.isNotBlank() && keyValue.isNotBlank(),
+                    enabled = !busy && status.startsWith("متصل") && keyName.isNotBlank() && keyValue.isNotBlank(),
                     onClick = {
                         busy = true
                         scope.launch {
                             runCatching { client.saveCredential(keyName, keyValue) }
-                                .onSuccess { keyValue = ""; savedKeys = (savedKeys + keyName).distinct(); scope.launch { runCatching { client.roomContext() }.onSuccess { onRoomContextLoaded(it) } }; output = "Saved locally in Termux vault as: " + keyName; status = "Connected · credential saved" }
+                                .onSuccess { keyValue = ""; savedKeys = (savedKeys + keyName).distinct(); scope.launch { runCatching { client.roomContext() }.onSuccess { onRoomContextLoaded(it) } }; output = "Saved locally in Termux vault as: " + keyName; status = "متصل · کلید ذخیره شد" }
                                 .onFailure { status = "Save failed: " + (it.message ?: "unknown error") }
                             busy = false
                         }
