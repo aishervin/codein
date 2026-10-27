@@ -360,7 +360,7 @@ private fun MainChatScreen(
         rawModelAnswer = ""
         val keyMatch = Regex("""\[\[CODEIN_SAVE_KEY\s+([A-Za-z0-9._-]+)\]\]([\s\S]*?)\[\[/CODEIN_SAVE_KEY\]\]""").find(response)
         val toolMatch = Regex("""\[\[CODEIN_TERMUX_EXEC\]\]([\s\S]*?)\[\[/CODEIN_TERMUX_EXEC\]\]""").find(response)
-        if (keyMatch != null && sharedRoomContext.isNotBlank()) {
+        if (keyMatch != null && keyMatch.groupValues[2].isNotBlank() && sharedRoomContext.isNotBlank()) {
             val name = keyMatch.groupValues[1].trim()
             val secret = keyMatch.groupValues[2].trim()
             activeAnswer = ""
