@@ -29,6 +29,9 @@ class TermuxBridgeClient(context: Context) {
 
     suspend fun workspace(): JSONObject = request("GET", "/api/workspace")
 
+    /** Loads the shared room contract, state, recent events, sessions, and skills. */
+    suspend fun roomContext(): JSONObject = request("GET", "/api/room")
+
     suspend fun credentialNames(): List<String> {
         val result = request("GET", "/api/keys")
         val array = result.optJSONArray("keys") ?: JSONArray()
