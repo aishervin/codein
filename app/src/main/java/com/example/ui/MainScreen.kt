@@ -380,6 +380,8 @@ private fun MainChatScreen(
         val target = webView
         val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
         val selectedProviderId = selectedModel.providerId
+        val selectedModelId = selectedModel.id
+        val selectedModelLabel = selectedModel.suffix
         if (selectedProviderId != null) {
             if (sharedRoomContext.isBlank()) {
                 isStreaming = false
@@ -387,7 +389,7 @@ private fun MainChatScreen(
                 return
             }
             agentScope.launch {
-                runCatching { termuxClient.chat(selectedProviderId, selectedModel.id, requestMessages, effectiveSystemPrompt) }
+                runCatching { termuxClient.chat(selectedProviderId, selectedModelId, requestMessages, effectiveSystemPrompt) }
                     .onSuccess { result ->
                         val answer = result.optString("content")
                         messages.add(ChatMessage(user = false, text = answer.ifBlank { "سرویس پاسخ متنی برنگرداند." }))
@@ -403,7 +405,7 @@ private fun MainChatScreen(
                             pendingCredentialName = error.credentialName
                             messages.add(ChatMessage(user = false, text = "برای استفاده از ${error.providerName} کلید API لازم است. کلید را همین‌جا در چت بفرست؛ برنامه آن را محلی در Termux ذخیره می‌کند و مقدارش را در تاریخچه نشان نمی‌دهد. فقط مقدار کلید را در پیام بعدی بفرست."))
                         } else {
-                            messages.add(ChatMessage(user = false, text = "خطای سرویس ${selectedModel.suffix}: " + (error.message ?: "خطای نامشخص")))
+                            messages.add(ChatMessage(user = false, text = "خطای سرویس ${selectedModelLabel}: " + (error.message ?: "خطای نامشخص")))
                         }
                         isStreaming = false
                     }
