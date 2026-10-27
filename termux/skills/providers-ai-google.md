@@ -18,6 +18,12 @@ Official references:
 - Ollama: https://docs.ollama.com/
 - Cloudflare Workers AI: https://developers.cloudflare.com/workers-ai/
 
+## Built-in local provider catalog
+
+The Termux bridge exposes `GET /api/providers` and `POST /api/chat`. The initial presets include Gemini, OpenAI, DeepSeek, Anthropic, OpenRouter, Mistral, xAI, and Groq, with their documented base URLs and a default model per provider. These are starting defaults, not a guarantee that model IDs remain available. Verify live provider documentation before changing defaults; allow the user to choose another supported model. The Android chat sends requests to the selected provider through the authenticated local Termux bridge, not through a scraped website.
+
+If `/api/chat` returns `428` with `error=missing_api_key`, ask the user for that provider's key directly in the current chat. Save it under the returned `credential_name` in `~/.codein/keys/`, never echo or display the key, then retry the same request. The Android UI must redact the secret from visible history. Never ask for a key that is already present in the vault.
+
 ## Provider behavior
 1. Check configured providers and available credential names before asking the user.
 2. Model IDs and endpoint URLs must come from current provider docs or an explicit user configuration; never hard-code an assumed “latest model”.
