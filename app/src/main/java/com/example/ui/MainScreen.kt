@@ -75,6 +75,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -313,14 +315,15 @@ private fun MainChatScreen(
         isStreaming = true
         val target = webView
         val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
-        if (selectedModel.providerId != null) {
+        val selectedProviderId = selectedModel.providerId
+        if (selectedProviderId != null) {
             if (sharedRoomContext.isBlank()) {
                 isStreaming = false
                 messages.add(ChatMessage(user = false, text = "برای استفاده از ${selectedModel.suffix}، یک‌بار از آیکون >_ پل Termux را راه‌اندازی و متصل کن. بعد از اتصال، درخواست مستقیم به سرویس انتخاب‌شده فرستاده می‌شود."))
                 return
             }
             agentScope.launch {
-                runCatching { termuxClient.chat(selectedModel.providerId, selectedModel.id, requestMessages, effectiveSystemPrompt) }
+                runCatching { termuxClient.chat(selectedProviderId, selectedModel.id, requestMessages, effectiveSystemPrompt) }
                     .onSuccess { result ->
                         val answer = result.optString("content")
                         messages.add(ChatMessage(user = false, text = answer.ifBlank { "سرویس پاسخ متنی برنگرداند." }))
@@ -833,65 +836,42 @@ private fun ConnectionStatus(isConnected: Boolean, connectionFailed: Boolean, on
 
 @Composable
 private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel) -> Unit) {
-    var dragDistance by remember { mutableStateOf(0f) }
-
-    fun selectNext(direction: Int) {
-        val currentIndex = codeinModels.indexOf(selectedModel).coerceAtLeast(0)
-        val nextIndex = (currentIndex + direction + codeinModels.size) % codeinModels.size
-        onSelectModel(codeinModels[nextIndex])
-        dragDistance = 0f
-    }
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.End,
-        modifier = Modifier
-            .padding(horizontal = 8.dp, vertical = 8.dp)
-            .pointerInput(selectedModel.id) {
-                detectVerticalDragGestures(
-                    onVerticalDrag = { change, dragAmount ->
-                        dragDistance += dragAmount
-                    },
-                    onDragEnd = {
-                        if (kotlin.math.abs(dragDistance) > 18f) {
-                            selectNext(if (dragDistance < 0f) 1 else -1)
-                        } else {
-                            dragDistance = 0f
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+            modifier = Modifier
+                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .clickable { expanded = true }
+        ) {
+            Text(
+                "SHΞN™",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontFamily = FontFamily.SansSerif,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.width(5.dp))
+            ModelSuffixText(selectedModel.suffix)
+            Spacer(Modifier.width(6.dp))
+            Text("⌄", color = TextMuted, fontSize = 16.sp)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            codeinModels.forEach { model ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(model.suffix, fontWeight = FontWeight.SemiBold)
+                            Text(model.id, color = TextMuted, fontSize = 10.sp)
                         }
                     },
-                    onDragCancel = { dragDistance = 0f }
+                    onClick = {
+                        onSelectModel(model)
+                        expanded = false
+                    }
                 )
             }
-            .clickable {
-                selectNext(1)
-            }
-    ) {
-        Text(
-            "SHΞN™",
-            color = MaterialTheme.colorScheme.onSurface,
-            fontFamily = FontFamily.SansSerif,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(Modifier.width(5.dp))
-        AnimatedContent(
-            targetState = selectedModel.suffix,
-            transitionSpec = {
-                (slideInVertically { it } + fadeIn(tween(130))) togetherWith
-                    (slideOutVertically { -it } + fadeOut(tween(100)))
-            },
-            label = "model-suffix"
-        ) { suffix ->
-            ModelSuffixText(suffix)
-        }
-        Spacer(Modifier.width(3.dp))
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceEvenly,
-            modifier = Modifier.height(16.dp)
-        ) {
-            Text("ᨈ", color = TextMuted.copy(alpha = .55f), fontSize = 7.sp, lineHeight = 7.sp)
-            Text("ᨆ", color = TextMuted.copy(alpha = .55f), fontSize = 7.sp, lineHeight = 7.sp)
         }
     }
 }
