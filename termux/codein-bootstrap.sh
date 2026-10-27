@@ -43,6 +43,7 @@ Shared local context for every model and agent connected to Codein.
 5. Never print secret values into chat, logs, or workspace files.
 6. If a required credential is missing, ask for that exact credential, store it in the local vault, then continue.
 7. Check the shared vault before asking again.
+8. Read relevant files under skills/ before using a service integration.
 ROOM
 if [ ! -f "$ROOT/state.json" ]; then
 cat > "$ROOT/state.json" <<'STATE'
