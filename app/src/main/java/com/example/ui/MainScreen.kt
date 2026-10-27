@@ -1327,6 +1327,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit) {
     var token by remember { mutableStateOf(client.bearerToken) }
     var keyName by remember { mutableStateOf("cloudflare_api_token") }
     var keyValue by remember { mutableStateOf("") }
+    var savedKeys by remember { mutableStateOf(emptyList<String>()) }
     var command by remember { mutableStateOf("pwd && ls -la") }
     var status by remember { mutableStateOf("Termux bridge not connected") }
     var output by remember { mutableStateOf("") }
@@ -1354,8 +1355,18 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit) {
                         client.baseUrl = baseUrl
                         client.bearerToken = token
                         scope.launch {
-                            runCatching { client.health() }
-                                .onSuccess { status = "Connected · " + it.optString("service", "Termux") }
+                            runCatching {
+                                val health = client.health()
+                                val room = client.roomContext()
+                                val names = client.credentialNames()
+                                Triple(health, room, names)
+                            }
+                                .onSuccess {
+                                    status = "Connected · " + it.first.optString("service", "Termux")
+                                    savedKeys = it.third
+                                    output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
+                                        "\\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" })
+                                }
                                 .onFailure { status = "Connection failed: " + (it.message ?: "unknown error") }
                             busy = false
                         }
@@ -1365,6 +1376,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit) {
                     }) { Text("Setup command") }
                 }
                 Text("LOCAL KEY VAULT", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("Saved: " + savedKeys.joinToString().ifBlank { "connect to load keys" }, color = TextMuted, fontSize = 11.sp)
                 OutlinedTextField(value = keyName, onValueChange = { keyName = it }, label = { Text("Credential name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = keyValue, onValueChange = { keyValue = it }, label = { Text("API token / secret") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Button(
@@ -1373,7 +1385,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit) {
                         busy = true
                         scope.launch {
                             runCatching { client.saveCredential(keyName, keyValue) }
-                                .onSuccess { keyValue = ""; output = "Saved locally in Termux vault as: " + keyName; status = "Connected · credential saved" }
+                                .onSuccess { keyValue = ""; savedKeys = (savedKeys + keyName).distinct(); output = "Saved locally in Termux vault as: " + keyName; status = "Connected · credential saved" }
                                 .onFailure { status = "Save failed: " + (it.message ?: "unknown error") }
                             busy = false
                         }
