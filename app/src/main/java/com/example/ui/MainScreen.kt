@@ -1665,8 +1665,11 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         }
                     }) { Text(if (busy) "در حال اتصال…" else "اتصال") }
                     TextButton(onClick = {
-                        output = "مراحل راه‌اندازی:\n۱) برنامه Termux را باز کن.\n۲) این دستور را اجرا کن:\ncurl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash\n۳) پل محلی را اجرا کن:\npython ~/.codein/server.py\n۴) در نشست جداگانه Termux، توکن را از فایل زیر بخوان و در همین صفحه وارد کن:\ncat ~/.codein/config.json\n۵) برگرد و «اتصال» را بزن. تا وقتی سرور در Termux اجراست، این صفحه می‌تواند به آن وصل شود."
-                    }) { Text("راهنمای راه‌اندازی") }
+                        val installCommand = "curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash"
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Codein Termux install", installCommand))
+                        output = "دستور نصب در کلیپ‌بورد کپی شد. در Termux آن را Paste و اجرا کن:\n\n" + installCommand + "\n\nبعد از نصب، سرور محلی را با این دستور اجرا کن:\npython ~/.codein/server.py\n\nتوکن اتصال را از ~/.codein/config.json بردار و فقط یک‌بار در همین صفحه وارد کن. آدرس مدل‌های Gemini، GPT، DeepSeek و سرویس‌های دیگر از قبل تنظیم شده؛ لازم نیست endpoint آن‌ها را دستی وارد کنی."
+                    }) { Text("کپی دستور نصب") }
                 }
                 Text("کلیدهای سرویس‌ها", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("سرویس را انتخاب کن تا نام استاندارد کلید پر شود؛ مقدار کلید فقط یک‌بار وارد می‌شود و محلی در Termux ذخیره می‌شود.", color = TextMuted, fontSize = 11.sp)
