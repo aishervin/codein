@@ -3,7 +3,7 @@ set -euo pipefail
 REPO_BASE="https://raw.githubusercontent.com/aishervin/codein/feature/termux-agent-room/termux"
 ROOT="$HOME/.codein"
 command -v pkg >/dev/null 2>&1 || { echo "Run this inside Termux." >&2; exit 1; }
-mkdir -p "$ROOT"/{workspace,agents,keys,sessions,events,skills,tools,logs}
+mkdir -p "$ROOT"/{workspace,agents,keys,sessions,events,skills,tools,logs,bin}
 chmod 700 "$ROOT" "$ROOT/keys"
 echo "[Codein] Preparing Termux runtime..."
 pkg update -y
@@ -12,6 +12,8 @@ curl -fsSL "$REPO_BASE/server.py" -o "$ROOT/server.py"
 chmod 700 "$ROOT/server.py"
 curl -fsSL "$REPO_BASE/skills/integrations.md" -o "$ROOT/skills/integrations.md"
 chmod 600 "$ROOT/skills/integrations.md"
+curl -fsSL "$REPO_BASE/with-key.py" -o "$ROOT/bin/codein-with-key"
+chmod 700 "$ROOT/bin/codein-with-key"
 if [ ! -f "$ROOT/config.json" ]; then
   python - "$ROOT/config.json" <<'PY'
 import json, secrets, sys
