@@ -378,7 +378,7 @@ private fun MainChatScreen(
             if (response.isNotBlank()) {
                 messages.add(ChatMessage(user = false, text = response))
                 if (sharedRoomContext.isNotBlank()) {
-                    val taskTitle = messages.lastOrNull { it.user }?.text?.take(120) ?: "Codein session"
+                    val taskTitle = messages.lastOrNull { it.user && it.text != "Termux tool result" }?.text?.take(120) ?: "Codein session"
                     agentScope.launch {
                         runCatching {
                             termuxClient.saveSession(
