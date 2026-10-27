@@ -224,6 +224,8 @@ private fun MainChatScreen(
     var connectionFailed by remember { mutableStateOf(false) }
     var isStreaming by remember { mutableStateOf(false) }
     var activeAnswer by remember { mutableStateOf("") }
+    var rawModelAnswer by remember { mutableStateOf("") }
+    var suppressDirectiveOutput by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
     var attachment by remember { mutableStateOf<CodeinAttachment?>(null) }
     var pendingDownload by remember { mutableStateOf<DownloadPayload?>(null) }
@@ -297,6 +299,8 @@ private fun MainChatScreen(
         requestMessages.put(JSONObject().put("role", "user").put("content", requestText))
         messages.add(ChatMessage(user = true, text = displayText, attachmentName = attachmentName, requestText = requestText))
         activeAnswer = ""
+        rawModelAnswer = ""
+        suppressDirectiveOutput = false
         isStreaming = true
         val target = webView
         if (target == null) {
@@ -341,7 +345,16 @@ private fun MainChatScreen(
             connectionFailed = false
         }
     }
-    bridge.onToken = { activeAnswer += it }
+    bridge.onToken = {
+        rawModelAnswer = (rawModelAnswer + it).takeLast(200000)
+        if (!suppressDirectiveOutput) {
+            activeAnswer += it
+            if (activeAnswer.contains("[[CODEIN_TERMUX_EXEC]]") || activeAnswer.contains("[[CODEIN_SAVE_KEY")) {
+                suppressDirectiveOutput = true
+                activeAnswer = ""
+            }
+        }
+    }
     bridge.onFinished = {
         val response = activeAnswer
         val toolMatch = Regex("""\[\[CODEIN_TERMUX_EXEC\]\]([\s\S]*?)\[\[/CODEIN_TERMUX_EXEC\]\]""").find(response)
