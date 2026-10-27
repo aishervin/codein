@@ -8,6 +8,8 @@ This skill is shared by every model in the Codein Agent Room. Use it whenever th
 3. If the credential is absent, ask for the exact token needed in chat, explain the service and permissions briefly, save it in the local vault, and continue. Never ask again if the matching key already exists.
 4. Never include secret values in session summaries, event logs, command output intended for chat, or project files.
 
+Use `~/.codein/bin/codein-with-key <credential_name> -- <command> [args...]` to inject a stored token into a child process as `CODEIN_SECRET` without printing it. For example, use the helper to run curl with an `Authorization: Bearer $CODEIN_SECRET` header. Never use `set -x`, `env`, `printenv`, or other secret-dumping operations while working with credentials.
+
 ## API-first service access
 Use Termux `curl` and `python` for direct APIs; no third-party integration service is required.
 
