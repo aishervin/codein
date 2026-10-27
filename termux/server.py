@@ -43,10 +43,18 @@ class Handler(BaseHTTPRequestHandler):
         if p=="/api/room":
             room_file=ROOT/"ROOM.md"
             journal=EVENTS/"journal.jsonl"
-            lines=journal.read_text(encoding="utf-8").splitlines()[-50:] if journal.exists() else []
-            sessions=[readj(f,{}) for f in sorted(SESSIONS.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True)[:10]]
-            skills={f.stem:f.read_text(encoding="utf-8")[:20000] for f in (ROOT/"skills").glob("*.md")}
-            return self.sendj(200,{"ok":True,"root":str(ROOT),"workspace":str(WORKSPACE),"room":room_file.read_text(encoding="utf-8") if room_file.exists() else "","state":readj(ROOT/"state.json",{}),"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file()),"events":[json.loads(x) for x in lines if x.strip()],"sessions":sessions,"skills":skills})
+            lines=journal.read_text(encoding="utf-8").splitlines()[-25:] if journal.exists() else []
+            sessions=[]
+            for file in sorted(SESSIONS.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True)[:5]:
+                item=readj(file,{})
+                sessions.append({"id":item.get("id"),"title":item.get("title"),"summary":str(item.get("summary",""))[-1800:],"next_action":item.get("next_action"),"updated_at":item.get("updated_at")})
+            skills={f.stem:f.read_text(encoding="utf-8")[:10000] for f in (ROOT/"skills").glob("*.md")}
+            events=[]
+            for line in lines:
+                if line.strip():
+                    item=json.loads(line)
+                    events.append({"at":item.get("at"),"kind":item.get("kind"),"data":item.get("data",{})})
+            return self.sendj(200,{"ok":True,"root":str(ROOT),"workspace":str(WORKSPACE),"room":room_file.read_text(encoding="utf-8") if room_file.exists() else "","state":readj(ROOT/"state.json",{}),"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file()),"events":events,"sessions":sessions,"skills":skills})
         if p=="/api/keys": return self.sendj(200,{"ok":True,"keys":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file())})
         if p.startswith("/api/keys/"):
             name=unquote(p[len("/api/keys/"):]).strip()
