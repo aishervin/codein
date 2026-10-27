@@ -10,6 +10,8 @@ pkg update -y
 pkg install -y python git openssh curl
 curl -fsSL "$REPO_BASE/server.py" -o "$ROOT/server.py"
 chmod 700 "$ROOT/server.py"
+curl -fsSL "$REPO_BASE/skills/integrations.md" -o "$ROOT/skills/integrations.md"
+chmod 600 "$ROOT/skills/integrations.md"
 if [ ! -f "$ROOT/config.json" ]; then
   python - "$ROOT/config.json" <<'PY'
 import json, secrets, sys
