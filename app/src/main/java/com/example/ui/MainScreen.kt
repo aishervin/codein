@@ -1425,7 +1425,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         busy = true
                         scope.launch {
                             runCatching { client.saveCredential(keyName, keyValue) }
-                                .onSuccess { keyValue = ""; savedKeys = (savedKeys + keyName).distinct(); output = "Saved locally in Termux vault as: " + keyName; status = "Connected · credential saved" }
+                                .onSuccess { keyValue = ""; savedKeys = (savedKeys + keyName).distinct(); scope.launch { runCatching { client.roomContext() }.onSuccess { onRoomContextLoaded(it) } }; output = "Saved locally in Termux vault as: " + keyName; status = "Connected · credential saved" }
                                 .onFailure { status = "Save failed: " + (it.message ?: "unknown error") }
                             busy = false
                         }
