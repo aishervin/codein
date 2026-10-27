@@ -1,19 +1,31 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
-REPO_BASE="https://raw.githubusercontent.com/aishervin/codein/feature/termux-agent-room/termux"
+BRANCH="feature/termux-agent-room"
+RAW="https://raw.githubusercontent.com/aishervin/codein/$BRANCH"
 ROOT="$HOME/.codein"
 command -v pkg >/dev/null 2>&1 || { echo "Run this inside Termux." >&2; exit 1; }
-mkdir -p "$ROOT"/{workspace,agents,keys,sessions,events,skills,tools,logs,bin}
+mkdir -p "$ROOT"/{workspace,agents,keys,sessions,events,skills,tools,logs,bin,docs}
 chmod 700 "$ROOT" "$ROOT/keys"
 echo "[Codein] Preparing Termux runtime..."
 pkg update -y
 pkg install -y python git openssh curl
-curl -fsSL "$REPO_BASE/server.py" -o "$ROOT/server.py"
-chmod 700 "$ROOT/server.py"
-curl -fsSL "$REPO_BASE/skills/integrations.md" -o "$ROOT/skills/integrations.md"
-chmod 600 "$ROOT/skills/integrations.md"
-curl -fsSL "$REPO_BASE/with-key.py" -o "$ROOT/bin/codein-with-key"
-chmod 700 "$ROOT/bin/codein-with-key"
+fetch() {
+  local remote="$1" target="$2"
+  curl --retry 3 --retry-delay 1 --fail --silent --show-error "$RAW/$remote" -o "$target"
+}
+fetch "termux/server.py" "$ROOT/server.py"
+fetch "termux/with-key.py" "$ROOT/bin/codein-with-key"
+chmod 700 "$ROOT/server.py" "$ROOT/bin/codein-with-key"
+fetch "termux/skills/integrations.md" "$ROOT/skills/integrations.md"
+fetch "termux/skills/github-cloudflare.md" "$ROOT/skills/github-cloudflare.md"
+fetch "termux/skills/telegram.md" "$ROOT/skills/telegram.md"
+fetch "termux/skills/providers-ai-google.md" "$ROOT/skills/providers-ai-google.md"
+fetch "termux/skills/development.md" "$ROOT/skills/development.md"
+fetch "termux/skills/web-research.md" "$ROOT/skills/web-research.md"
+fetch "docs/TOOL_DOCS_INDEX.md" "$ROOT/docs/TOOL_DOCS_INDEX.md"
+fetch "docs/AGENT_SYSTEM_PROMPT.md" "$ROOT/docs/AGENT_SYSTEM_PROMPT.md"
+fetch "termux/LIBRARIES.md" "$ROOT/docs/LIBRARIES.md"
+chmod 600 "$ROOT/skills/"*.md "$ROOT/docs/"*.md
 if [ ! -f "$ROOT/config.json" ]; then
   python - "$ROOT/config.json" <<'PY'
 import json, secrets, sys
@@ -31,19 +43,21 @@ Shared local context for every model and agent connected to Codein.
 - keys/: local API-key vault (never commit)
 - sessions/: session summaries and resumable state
 - events/: append-only activity journal
-- skills/: reusable workflows
+- skills/: reusable service and engineering workflows
 - tools/: local tool adapters
+- docs/: canonical documentation index, shared prompt, and dependency policy
 - logs/: runtime logs
 
 ## Protocol
 1. Read ROOM.md and state.json before starting a task.
 2. Read the latest relevant session/event summaries.
-3. Record a short plan in events/ before meaningful changes.
-4. After changes, update state.json and save a session summary.
-5. Never print secret values into chat, logs, or workspace files.
-6. If a required credential is missing, ask for that exact credential, store it in the local vault, then continue.
-7. Check the shared vault before asking again.
-8. Read relevant files under skills/ before using a service integration.
+3. Read docs/AGENT_SYSTEM_PROMPT.md and the relevant skill under skills/.
+4. For API/library/model changes, verify live official docs using docs/TOOL_DOCS_INDEX.md; a URL index alone does not mean docs were checked.
+5. Record a short plan and actual source URLs/date checked in events/ before meaningful changes.
+6. After changes, update state.json and save a session summary.
+7. Never print secret values into chat, logs, or workspace files.
+8. If a required credential is missing, ask for that exact credential, store it in the local vault, then continue.
+9. Check the shared vault before asking again.
 ROOM
 if [ ! -f "$ROOT/state.json" ]; then
 cat > "$ROOT/state.json" <<'STATE'
@@ -56,6 +70,6 @@ config.json
 *.secret
 IGNORE
 echo
-echo "[Codein] Workspace ready: $ROOT"
+echo "[Codein] Workspace and documentation skills ready: $ROOT"
 echo "[Codein] Start bridge: python $ROOT/server.py"
 echo "[Codein] Keep Termux open while Codein uses it."
