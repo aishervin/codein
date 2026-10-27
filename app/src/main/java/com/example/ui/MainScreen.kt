@@ -301,10 +301,11 @@ private fun MainChatScreen(
             messages.add(ChatMessage(user = false, text = "Internal connection is not ready. Try again."))
             return
         }
+        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext
         val script = "if (typeof window.CodeinNativeSend === 'function') " +
             "window.CodeinNativeSend(${JSONObject.quote(requestMessages.toString())}," +
             "${JSONObject.quote(selectedModel.id)},${JSONObject.quote("logical")}," +
-            "${JSONObject.quote(SHEN_SYSTEM_PROMPT)});" +
+            "${JSONObject.quote(effectiveSystemPrompt)});" +
             " else CodeinBridge.error('Internal bridge is not ready');"
         target.evaluateJavascript(script, null)
     }
