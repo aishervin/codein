@@ -352,26 +352,27 @@ private fun MainChatScreen(
             agentToolCalls += 1
             messages.add(ChatMessage(user = false, text = "⚙ Executing in Termux…"))
             agentScope.launch {
-                runCatching { termuxClient.execute(command) }
-                    .onSuccess { result ->
-                        val toolResult = buildString {
-                            append("Termux execution result (exit code ")
-                            append(result.optInt("exit_code", -1))
-                            append("):\n")
-                            append(result.optString("stdout").takeLast(10000))
-                            if (result.optString("stderr").isNotBlank()) {
-                                append("\nSTDERR:\n")
-                                append(result.optString("stderr").takeLast(4000))
-                            }
-                            if (result.has("error")) append("\nERROR: ").append(result.optString("error"))
-                            append("\nContinue the original task using this result. Do not repeat successful work.")
+                val execution = runCatching { termuxClient.execute(command) }
+                if (execution.isSuccess) {
+                    val result = execution.getOrThrow()
+                    runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
+                    val toolResult = buildString {
+                        append("Termux execution result (exit code ")
+                        append(result.optInt("exit_code", -1))
+                        append("):\n")
+                        append(result.optString("stdout").takeLast(10000))
+                        if (result.optString("stderr").isNotBlank()) {
+                            append("\nSTDERR:\n")
+                            append(result.optString("stderr").takeLast(4000))
                         }
-                        sendRequest("Termux tool result", toolResult, null, messages.toList())
+                        if (result.has("error")) append("\nERROR: ").append(result.optString("error"))
+                        append("\nContinue the original task using this result. Do not repeat successful work.")
                     }
-                    .onFailure {
-                        messages.add(ChatMessage(user = false, text = "Termux execution failed: " + (it.message ?: "unknown error")))
-                        isStreaming = false
-                    }
+                    sendRequest("Termux tool result", toolResult, null, messages.toList())
+                } else {
+                    messages.add(ChatMessage(user = false, text = "Termux execution failed: " + (execution.exceptionOrNull()?.message ?: "unknown error")))
+                    isStreaming = false
+                }
             }
         } else {
             if (response.isNotBlank()) messages.add(ChatMessage(user = false, text = response))
