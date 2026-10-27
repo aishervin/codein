@@ -230,6 +230,7 @@ private fun MainChatScreen(
     var selectedModel by remember { mutableStateOf(codeinModels.first()) }
     var showSettings by remember { mutableStateOf(false) }
     var showTermuxRoom by remember { mutableStateOf(false) }
+    var sharedRoomContext by remember { mutableStateOf("") }
     val settingsSheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -558,7 +559,7 @@ private fun MainChatScreen(
     }
 
     if (showTermuxRoom) {
-        TermuxAgentRoomDialog(onDismiss = { showTermuxRoom = false })
+        TermuxAgentRoomDialog(onDismiss = { showTermuxRoom = false }, onRoomContextLoaded = { sharedRoomContext = it.toString() })
     }
 
     if (showSettings) {
@@ -1319,7 +1320,7 @@ private val CODEIN_JS_BRIDGE = """
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TermuxAgentRoomDialog(onDismiss: () -> Unit) {
+private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (JSONObject) -> Unit) {
     val context = LocalContext.current
     val client = remember(context) { TermuxBridgeClient(context) }
     val scope = rememberCoroutineScope()
@@ -1364,6 +1365,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit) {
                                 .onSuccess {
                                     status = "Connected · " + it.first.optString("service", "Termux")
                                     savedKeys = it.third
+                                    onRoomContextLoaded(it.second)
                                     output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
                                         "\\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" })
                                 }
