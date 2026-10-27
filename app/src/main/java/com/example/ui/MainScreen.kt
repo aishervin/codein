@@ -358,8 +358,25 @@ private fun MainChatScreen(
     bridge.onFinished = {
         val response = rawModelAnswer.ifBlank { activeAnswer }
         rawModelAnswer = ""
+        val keyMatch = Regex("""\[\[CODEIN_SAVE_KEY\s+([A-Za-z0-9._-]+)\]\]([\s\S]*?)\[\[/CODEIN_SAVE_KEY\]\]""").find(response)
         val toolMatch = Regex("""\[\[CODEIN_TERMUX_EXEC\]\]([\s\S]*?)\[\[/CODEIN_TERMUX_EXEC\]\]""").find(response)
-        if (toolMatch != null && sharedRoomContext.isNotBlank() && agentToolCalls < 12) {
+        if (keyMatch != null && sharedRoomContext.isNotBlank()) {
+            val name = keyMatch.groupValues[1].trim()
+            val secret = keyMatch.groupValues[2].trim()
+            activeAnswer = ""
+            isStreaming = false
+            messages.add(ChatMessage(user = false, text = "Saving $name to the local Termux vault…"))
+            agentScope.launch {
+                val saved = runCatching { termuxClient.saveCredential(name, secret) }
+                if (saved.isSuccess) {
+                    runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
+                    sendRequest("Credential saved", "Credential " + name + " is saved in the local vault. Continue the original task without repeating or revealing its value.", null, messages.toList())
+                } else {
+                    messages.add(ChatMessage(user = false, text = "Could not save credential locally: " + (saved.exceptionOrNull()?.message ?: "unknown error")))
+                    isStreaming = false
+                }
+            }
+        } else if (toolMatch != null && sharedRoomContext.isNotBlank() && agentToolCalls < 12) {
             val command = toolMatch.groupValues[1].trim()
             activeAnswer = ""
             isStreaming = false
