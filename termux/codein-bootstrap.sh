@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
-BRANCH="feature/termux-agent-room"
+BRANCH="main"
 RAW="https://raw.githubusercontent.com/aishervin/codein/$BRANCH"
 ROOT="$HOME/.codein"
 command -v pkg >/dev/null 2>&1 || { echo "Run this inside Termux." >&2; exit 1; }
