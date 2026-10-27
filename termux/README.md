@@ -6,7 +6,7 @@ Local-first bridge and shared context for all model providers. The initial bridg
 
 ```bash
 pkg install -y curl
-curl -fsSL https://raw.githubusercontent.com/aishervin/codein/feature/termux-agent-room/termux/codein-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash
 python ~/.codein/server.py
 ```
 
