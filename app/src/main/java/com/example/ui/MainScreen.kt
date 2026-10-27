@@ -786,6 +786,7 @@ private fun MainChatScreen(
             preferences = chatPrefs,
             onDismiss = { showHistory = false },
             onOpen = { entry ->
+                archiveCurrentChat()
                 messages.clear()
                 messages.addAll(decodeChatMessages(entry.optJSONArray("messages") ?: JSONArray()))
                 activeAnswer = ""
@@ -1552,9 +1553,13 @@ private fun CodeinHistoryDialog(
     onOpen: (JSONObject) -> Unit,
     onDelete: (String) -> Unit
 ) {
-    val entries = remember {
-        val stored = runCatching { JSONArray(preferences.getString(SAVED_CHATS_KEY, "[]")) }.getOrDefault(JSONArray())
-        (0 until stored.length()).mapNotNull { stored.optJSONObject(it) }
+    var entries by remember {
+        mutableStateOf(
+            run {
+                val stored = runCatching { JSONArray(preferences.getString(SAVED_CHATS_KEY, "[]")) }.getOrDefault(JSONArray())
+                (0 until stored.length()).mapNotNull { stored.optJSONObject(it) }
+            }
+        )
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1582,7 +1587,7 @@ private fun CodeinHistoryDialog(
                                     Text(entry.optString("title", "گفت‌وگو"), fontWeight = FontWeight.SemiBold, maxLines = 2)
                                     Text("${decodeChatMessages(entry.optJSONArray("messages") ?: JSONArray()).size} پیام", color = TextMuted, fontSize = 11.sp)
                                 }
-                                TextButton(onClick = { onDelete(entry.optString("id")) }) { Text("حذف") }
+                                TextButton(onClick = { onDelete(entry.optString("id")); entries = entries.filter { it.optString("id") != entry.optString("id") } }) { Text("حذف") }
                             }
                         }
                     }
