@@ -1430,7 +1430,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
     var keyValue by remember { mutableStateOf("") }
     var savedKeys by remember { mutableStateOf(emptyList<String>()) }
     var command by remember { mutableStateOf("pwd && ls -la") }
-    var status by remember { mutableStateOf("Termux bridge not connected") }
+    var status by remember { mutableStateOf("اتصال ترموکس هنوز برقرار نشده") }
     var output by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
@@ -1439,7 +1439,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("TERMUX AGENT ROOM", fontWeight = FontWeight.ExtraBold)
-                Text("Shared local workspace · credentials · terminal", color = TextMuted, fontSize = 12.sp)
+                Text("فضای کاری مشترک، اتصال سرویس‌ها و اجرای ابزارها", color = TextMuted, fontSize = 12.sp)
             }
         },
         text = {
@@ -1447,9 +1447,11 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                 modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
-                Text(status, color = if (status.startsWith("Connected")) Color(0xFF4DDB8A) else NeonOrangeSoft, fontSize = 12.sp)
-                OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("Termux bridge URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("Local bridge token") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text(status, color = if (status.startsWith("Connected") || status.startsWith("متصل")) Color(0xFF4DDB8A) else NeonOrangeSoft, fontSize = 12.sp)
+                Text("این صفحه فقط وقتی کار می‌کند که پل محلی Codein در Termux اجرا باشد. آدرس پیش‌فرض همین گوشی است؛ معمولاً نیازی به تغییرش نیست.", color = TextMuted, fontSize = 12.sp)
+                OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("آدرس پل محلی (پیش‌فرض)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("توکن اتصال محلی") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("توکن را یک‌بار از فایل ~/.codein/config.json داخل Termux بردار. این توکن فقط برای اتصال همین گوشی است؛ آن را در چت یا مخزن کد نفرست.", color = TextMuted, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(enabled = !busy, onClick = {
                         busy = true
@@ -1463,24 +1465,35 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                                 Triple(health, room, names)
                             }
                                 .onSuccess {
-                                    status = "Connected · " + it.first.optString("service", "Termux")
+                                    status = "متصل · " + it.first.optString("service", "Termux")
                                     savedKeys = it.third
                                     onRoomContextLoaded(it.second)
                                     output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
                                         "\\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" })
                                 }
-                                .onFailure { status = "Connection failed: " + (it.message ?: "unknown error") }
+                                .onFailure { status = "اتصال ناموفق: " + (it.message ?: "خطای نامشخص") }
                             busy = false
                         }
                     }) { Text(if (busy) "Connecting…" else "Connect") }
                     TextButton(onClick = {
-                        output = "Run inside Termux:\npkg install -y curl\ncurl -fsSL https://raw.githubusercontent.com/aishervin/codein/feature/termux-agent-room/termux/codein-bootstrap.sh | bash\npython ~/.codein/server.py"
-                    }) { Text("Setup command") }
+                        output = "مراحل راه‌اندازی:\n۱) برنامه Termux را باز کن.\n۲) این دستور را اجرا کن:\ncurl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash\n۳) پل محلی را اجرا کن:\npython ~/.codein/server.py\n۴) در نشست جداگانه Termux، توکن را از فایل زیر بخوان و در همین صفحه وارد کن:\ncat ~/.codein/config.json\n۵) برگرد و «اتصال» را بزن. تا وقتی سرور در Termux اجراست، این صفحه می‌تواند به آن وصل شود."
+                    }) { Text("راهنمای راه‌اندازی") }
                 }
-                Text("LOCAL KEY VAULT", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                Text("Saved: " + savedKeys.joinToString().ifBlank { "connect to load keys" }, color = TextMuted, fontSize = 11.sp)
-                OutlinedTextField(value = keyName, onValueChange = { keyName = it }, label = { Text("Credential name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = keyValue, onValueChange = { keyValue = it }, label = { Text("API token / secret") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("کلیدهای سرویس‌ها", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("سرویس را انتخاب کن تا نام استاندارد کلید پر شود؛ مقدار کلید فقط یک‌بار وارد می‌شود و محلی در Termux ذخیره می‌شود.", color = TextMuted, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    listOf("GitHub" to "github_token", "Cloudflare" to "cloudflare_api_token", "Telegram" to "telegram_bot_token").forEach { (label, value) ->
+                        TextButton(onClick = { keyName = value }) { Text(label, fontSize = 10.sp) }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    listOf("Gemini" to "gemini_api_key", "OpenAI" to "openai_api_key", "Anthropic" to "anthropic_api_key", "DeepSeek" to "deepseek_api_key").forEach { (label, value) ->
+                        TextButton(onClick = { keyName = value }) { Text(label, fontSize = 10.sp) }
+                    }
+                }
+                Text("کلیدهای ذخیره‌شده: " + savedKeys.joinToString().ifBlank { "بعد از اتصال نمایش داده می‌شوند" }, color = TextMuted, fontSize = 11.sp)
+                OutlinedTextField(value = keyName, onValueChange = { keyName = it }, label = { Text("نام کلید (قابل ویرایش)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = keyValue, onValueChange = { keyValue = it }, label = { Text("مقدار کلید / توکن سرویس") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Button(
                     enabled = !busy && keyName.isNotBlank() && keyValue.isNotBlank(),
                     onClick = {
@@ -1493,11 +1506,12 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("Save credential to shared vault") }
-                Text("TERMINAL", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("Termux command") }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 3)
+                 ) { Text("ذخیرهٔ امن کلید در Termux") }
+                Text("اجرای دستور در ترموکس", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("این بخش برای کارهای فنی است؛ دستور لینوکس را اجرا می‌کند و خروجی واقعی را برمی‌گرداند. برای استفادهٔ عادی از چت لازم نیست چیزی اینجا بنویسی.", color = TextMuted, fontSize = 11.sp)
+                OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("دستور (برای نمونه: pwd)") }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 3)
                 Button(
-                    enabled = !busy && command.isNotBlank(),
+                    enabled = !busy && command.isNotBlank() && status.startsWith("متصل"),
                     onClick = {
                         busy = true
                         scope.launch {
@@ -1505,14 +1519,14 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                                 .onSuccess {
                                     output = it.optString("stdout") + if (it.optString("stderr").isNotBlank()) "\n" + it.optString("stderr") else ""
                                     if (output.isBlank()) output = "Exit code: " + it.optInt("exit_code")
-                                    status = "Connected · exit " + it.optInt("exit_code", -1)
+                                    status = "متصل · کد خروج " + it.optInt("exit_code", -1)
                                 }
                                 .onFailure { status = "Command failed: " + (it.message ?: "unknown error") }
                             busy = false
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "Working…" else "Run in Termux") }
+                ) { Text(if (busy) "در حال اجرا…" else "اجرای دستور") }
                 if (output.isNotBlank()) {
                     Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Text(output.takeLast(5000), color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
