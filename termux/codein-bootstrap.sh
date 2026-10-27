@@ -73,3 +73,19 @@ echo
 echo "[Codein] Workspace and documentation skills ready: $ROOT"
 echo "[Codein] Start bridge: python $ROOT/server.py"
 echo "[Codein] Keep Termux open while Codein uses it."
+
+echo
+echo "============================================================"
+echo "[Codein] TERMUX CONNECTION TOKEN"
+echo "Copy this token into Codein app > Termux connection:"
+python - "$ROOT/config.json" <<'PY'
+import json, sys
+from pathlib import Path
+config = json.loads(Path(sys.argv[1]).read_text())
+print(config["token"])
+PY
+echo "============================================================"
+echo "This token is private. Do not share it or post a screenshot."
+echo
+echo "[Codein] Start the bridge with:"
+echo "python $ROOT/server.py"
