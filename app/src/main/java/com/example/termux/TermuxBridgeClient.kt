@@ -144,6 +144,7 @@ class TermuxBridgeClient(context: Context) {
                 connectTimeout = 8_000
                 readTimeout = (timeoutSeconds.coerceAtMost(900) * 1000).coerceAtLeast(45_000)
                 setRequestProperty("Authorization", "Bearer " + bearerToken)
+                setRequestProperty("MCP-Protocol-Version", "2025-03-26")
                 setRequestProperty("Accept", "application/json, text/event-stream")
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 doOutput = true
@@ -172,6 +173,7 @@ class TermuxBridgeClient(context: Context) {
             connectTimeout = 8_000
             readTimeout = 10_000
             setRequestProperty("Authorization", "Bearer " + bearerToken)
+            setRequestProperty("MCP-Protocol-Version", "2025-03-26")
             setRequestProperty("Accept", "application/json, text/event-stream")
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             doOutput = true
