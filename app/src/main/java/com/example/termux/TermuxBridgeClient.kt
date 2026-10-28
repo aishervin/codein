@@ -114,8 +114,8 @@ class TermuxBridgeClient(context: Context) {
             check(bearerToken.isNotBlank()) { "Termux bridge token is missing. Start the Termux bridge and enter its token in Codein Settings." }
             val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
-                connectTimeout = 4_000
-                readTimeout = 30_000
+                connectTimeout = 8_000
+                readTimeout = 45_000
                 setRequestProperty("Authorization", "Bearer ${bearerToken}")
                 setRequestProperty("Accept", "application/json")
                 if (body != null) {
