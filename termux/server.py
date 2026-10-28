@@ -126,7 +126,7 @@ def dispatch_mcp_tool(name, args):
         name=str(args.get("name","")).strip(); value=str(args.get("value",""))
         if not name or any(char in name for char in "/\\") or not value: raise ValueError("Credential name and value are required")
         path=KEYS/(name+".json")
-        path.write_text(json.dumps({"name":name,"value":value,"updated_at":now()},ensure_ascii=False,indent=2)+"\\n",encoding="utf-8")
+        path.write_text(json.dumps({"name":name,"value":value,"updated_at":now()},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
         path.chmod(0o600); event("credential_saved",{"name":name})
         return {"ok":True,"name":name}
     if name=="session_save":
@@ -135,7 +135,7 @@ def dispatch_mcp_tool(name, args):
         if not sid: raise ValueError("Invalid session id")
         payload["id"]=sid; payload["updated_at"]=now()
         path=SESSIONS/(sid+".json")
-        path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\\n",encoding="utf-8"); path.chmod(0o600)
+        path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"); path.chmod(0o600)
         event("session_saved",{"id":sid,"title":payload.get("title","")})
         return {"ok":True,"id":sid}
     if name=="event_record":
@@ -145,7 +145,7 @@ def dispatch_mcp_tool(name, args):
         fields=args.get("fields") or {}
         if not isinstance(fields,dict): raise ValueError("fields must be an object")
         state=readj(ROOT/"state.json",{}); state.update(fields); state["last_updated"]=now()
-        path=ROOT/"state.json"; path.write_text(json.dumps(state,ensure_ascii=False,indent=2)+"\\n",encoding="utf-8"); path.chmod(0o600)
+        path=ROOT/"state.json"; path.write_text(json.dumps(state,ensure_ascii=False,indent=2)+"\n",encoding="utf-8"); path.chmod(0o600)
         event("workspace_state_updated",{"keys":sorted(fields.keys())})
         return {"ok":True,"state":state}
     if name=="provider_models_list":
