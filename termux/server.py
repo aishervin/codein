@@ -137,60 +137,105 @@ def provider_chat(data):
         if content: clean.append({"role":role,"content":content[:50000]})
     system=str(data.get("system",""))[:30000]
     timeout=max(10,min(int(data.get("timeout",120)),180))
+    tool_catalog=mcp_tools_catalog()
     try:
         if provider["kind"]=="gemini":
             contents=[]
-            for m in clean:
-                if m["role"]=="system": system += "\n"+m["content"]; continue
-                contents.append({"role":"model" if m["role"]=="assistant" else "user","parts":[{"text":m["content"]}]})
-            payload={"contents":contents,"generationConfig":{"temperature":0.3}}
-            if system: payload["systemInstruction"]={"parts":[{"text":system}]}
+            for item in clean:
+                if item["role"]=="system": system += "\n"+item["content"]; continue
+                contents.append({"role":"model" if item["role"]=="assistant" else "user","parts":[{"text":item["content"]}]})
+            function_declarations=[{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]} for tool in tool_catalog]
             url=provider["base_url"]+"/models/"+quote(model,safe="")+":generateContent?key="+quote(api_key,safe="")
             headers={"Content-Type":"application/json"}
+            for _ in range(9):
+                payload={"contents":contents,"generationConfig":{"temperature":0.3},"tools":[{"functionDeclarations":function_declarations}]}
+                if system: payload["systemInstruction"]={"parts":[{"text":system}]}
+                request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
+                with urlopen(request,timeout=timeout) as response: raw=json.loads(response.read(3_000_000).decode())
+                candidates=raw.get("candidates") or []
+                candidate=candidates[0] if candidates else {}
+                model_content=candidate.get("content") or {}
+                parts=model_content.get("parts") or []
+                calls=[part.get("functionCall") for part in parts if isinstance(part,dict) and isinstance(part.get("functionCall"),dict)]
+                if not calls:
+                    answer="".join(str(part.get("text","")) for part in parts if isinstance(part,dict))
+                    break
+                contents.append(model_content)
+                tool_responses=[]
+                for call in calls[:12]:
+                    tool_name=str(call.get("name",""))
+                    arguments=call.get("args") or {}
+                    try: tool_result=dispatch_mcp_tool(tool_name,arguments)
+                    except Exception as exc: tool_result={"error":str(exc)[:1500]}
+                    tool_responses.append({"functionResponse":{"name":tool_name,"response":{"result":tool_result}}})
+                contents.append({"role":"user","parts":tool_responses})
+            else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         elif provider["kind"]=="anthropic":
             system_parts=[system] if system else []
-            for m in clean:
-                if m["role"]=="system": system_parts.append(m["content"])
-            msgs=[{"role":"assistant" if m["role"]=="assistant" else "user","content":m["content"]} for m in clean if m["role"]!="system"]
-            payload={"model":model,"max_tokens":4096,"messages":msgs}
-            if system_parts: payload["system"]="\n\n".join(system_parts)
+            for item in clean:
+                if item["role"]=="system": system_parts.append(item["content"])
+            msgs=[{"role":"assistant" if item["role"]=="assistant" else "user","content":item["content"]} for item in clean if item["role"]!="system"]
+            tools=[{"name":tool["name"],"description":tool["description"],"input_schema":tool["inputSchema"]} for tool in tool_catalog]
             url=provider["base_url"]+"/messages"
             headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"}
+            for _ in range(9):
+                payload={"model":model,"max_tokens":4096,"messages":msgs,"tools":tools}
+                if system_parts: payload["system"]="\n\n".join(system_parts)
+                request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
+                with urlopen(request,timeout=timeout) as response: raw=json.loads(response.read(3_000_000).decode())
+                blocks=raw.get("content") or []
+                tool_uses=[block for block in blocks if isinstance(block,dict) and block.get("type")=="tool_use"]
+                if not tool_uses:
+                    answer="".join(str(block.get("text","")) for block in blocks if isinstance(block,dict) and block.get("type")=="text")
+                    break
+                msgs.append({"role":"assistant","content":blocks})
+                results=[]
+                for call in tool_uses[:12]:
+                    try: result=dispatch_mcp_tool(str(call.get("name","")),call.get("input") or {})
+                    except Exception as exc: result={"error":str(exc)[:1500]}
+                    results.append({"type":"tool_result","tool_use_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
+                msgs.append({"role":"user","content":results})
+            else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         else:
             msgs=[]
             if system: msgs.append({"role":"system","content":system})
-            msgs.extend(m for m in clean if m["role"]!="system")
-            payload={"model":model,"messages":msgs,"stream":False}
+            msgs.extend(item for item in clean if item["role"]!="system")
+            tools=[{"type":"function","function":{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]}} for tool in tool_catalog]
             url=provider["base_url"].rstrip("/")+"/chat/completions"
             headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key}
-        request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
-        with urlopen(request,timeout=timeout) as response:
-            raw=json.loads(response.read(3_000_000).decode())
-        if provider["kind"]=="gemini":
-            candidates=raw.get("candidates") or []
-            parts=((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
-            answer="".join(str(part.get("text","")) for part in parts)
-        elif provider["kind"]=="anthropic":
-            answer="".join(str(part.get("text","")) for part in raw.get("content",[]) if part.get("type")=="text")
-        else:
-            choices=raw.get("choices") or []
-            answer=str(((choices[0].get("message") or {}).get("content","")) if choices else "")
+            for _ in range(9):
+                payload={"model":model,"messages":msgs,"stream":False,"tools":tools,"tool_choice":"auto"}
+                request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
+                with urlopen(request,timeout=timeout) as response: raw=json.loads(response.read(3_000_000).decode())
+                choices=raw.get("choices") or []
+                message=(choices[0].get("message") or {}) if choices else {}
+                calls=message.get("tool_calls") or []
+                if not calls:
+                    answer=str(message.get("content") or "")
+                    break
+                msgs.append(message)
+                for call in calls[:12]:
+                    function=call.get("function") or {}
+                    name=str(function.get("name",""))
+                    try: arguments=json.loads(function.get("arguments") or "{}")
+                    except ValueError: arguments={}
+                    try: result=dispatch_mcp_tool(name,arguments)
+                    except Exception as exc: result={"error":str(exc)[:1500]}
+                    msgs.append({"role":"tool","tool_call_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
+            else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         if not answer: return 502,{"ok":False,"error":"Provider returned an empty response","provider":pid,"model":model}
         event("provider_chat_completed",{"provider":pid,"model":model})
         return 200,{"ok":True,"provider":pid,"model":model,"content":answer}
-    except HTTPError as e:
+    except HTTPError as exc:
         detail=""
-        try: detail=e.read(12000).decode(errors="replace")
+        try: detail=exc.read(12000).decode(errors="replace")
         except Exception: pass
-        event("provider_chat_error",{"provider":pid,"model":model,"status":e.code})
-        return 502,{"ok":False,"error":"Provider HTTP "+str(e.code),"provider":pid,"model":model,"detail":detail[:3000]}
+        event("provider_chat_error",{"provider":pid,"model":model,"status":exc.code})
+        return 502,{"ok":False,"error":"Provider HTTP "+str(exc.code),"provider":pid,"model":model,"detail":detail[:3000]}
     except (URLError,TimeoutError):
-        # Never echo exception text: URL-bearing errors could include a Gemini API key.
         return 502,{"ok":False,"error":"Provider connection failed. Check network access and try again."}
-    except Exception as e:
-        # Exception messages may contain request URLs or payload fragments.
-        return 502,{"ok":False,"error":"Provider request failed","error_type":type(e).__name__}
-
+    except Exception as exc:
+        return 502,{"ok":False,"error":"Provider request failed","error_type":type(exc).__name__}
 
 def readj(p, fallback):
     try: return json.loads(p.read_text(encoding="utf-8"))
