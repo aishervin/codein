@@ -130,9 +130,11 @@ class TermuxBridgeClient(context: Context) {
     }
 
     /** Approve one exact command for a single execution after the user confirms it in the app. */
-    suspend fun approveCommand(command: String): JSONObject {
+    suspend fun approveCommand(command: String, always: Boolean = false): JSONObject {
         require(command.isNotBlank()) { "Command cannot be empty" }
-        return mcpTool("termux_command_approve", JSONObject().put("command", command))
+        return mcpTool("termux_command_approve", JSONObject()
+            .put("command", command)
+            .put("always", always))
     }
 
     /** Execute a local shell command using the standard MCP tools/call method. */
