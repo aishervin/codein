@@ -1988,6 +1988,34 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Button(
+                    enabled = !busy && token.isNotBlank() && aiKeyValue.isNotBlank(),
+                    onClick = {
+                        busy = true
+                        client.baseUrl = baseUrl
+                        client.bearerToken = token
+                        scope.launch {
+                            runCatching {
+                                client.health()
+                                client.discoverModels(aiProviderId, aiKeyValue)
+                            }.onSuccess { models ->
+                                aiModels = models
+                                selectedAiModel = models.firstOrNull().orEmpty()
+                                integrationPrefs.edit().putString("models_$aiProviderId", JSONArray(models).toString())
+                                    .putString("selected_model_$aiProviderId", selectedAiModel)
+                                    .putString("ai_provider", aiProviderId).apply()
+                                status = "استعلام موفق · ${models.size} مدل در دسترس"
+                                output = "فهرست مدل‌ها از API زنده سرویس دریافت شد؛ هیچ شناسه‌ای از پیش حدس زده نشده."
+                            }.onFailure { error ->
+                                aiModels = emptyList()
+                                selectedAiModel = ""
+                                status = "استعلام مدل ناموفق: " + (error.message ?: "خطای نامشخص")
+                            }
+                            busy = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (busy) "در حال استعلام…" else "استعلام مدل‌ها با کلید واردشده") }
                 OutlinedButton(
                     enabled = !busy && token.isNotBlank() && savedKeys.contains("${aiProviderId}_api_key"),
                     onClick = {
@@ -2005,10 +2033,8 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                                     .putString("selected_model_$aiProviderId", selectedAiModel)
                                     .putString("ai_provider", aiProviderId).apply()
                                 status = "استعلام موفق · ${models.size} مدل در دسترس"
-                                output = "فهرست مدل‌ها از API زنده سرویس دریافت شد؛ هیچ شناسه‌ای از پیش حدس زده نشده."
+                                output = "فهرست مدل‌ها با کلید ذخیره‌شده دریافت شد."
                             }.onFailure { error ->
-                                aiModels = emptyList()
-                                selectedAiModel = ""
                                 status = "استعلام مدل ناموفق: " + (error.message ?: "خطای نامشخص")
                             }
                             busy = false
