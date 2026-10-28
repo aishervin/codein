@@ -211,7 +211,80 @@ class Handler(BaseHTTPRequestHandler):
             items=[readj(f,{}) for f in sorted(SESSIONS.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True)[:50]]
             return self.sendj(200,{"ok":True,"sessions":items})
         return self.sendj(404,{"ok":False,"error":"Unknown endpoint"})
+    def mcp_result(self, request_id, result, status=200):
+        self.sendj(status, {"jsonrpc":"2.0","id":request_id,"result":result})
+
+    def mcp_error(self, request_id, code, message, data=None, status=200):
+        error={"code":code,"message":message}
+        if data is not None: error["data"]=data
+        self.sendj(status,{"jsonrpc":"2.0","id":request_id,"error":error})
+
+    def handle_mcp(self):
+        if not self.auth(): return self.mcp_error(None,-32001,"Authorization required",status=401)
+        try: message=self.body()
+        except Exception: return self.mcp_error(None,-32700,"Parse error",status=400)
+        if not isinstance(message,dict) or message.get("jsonrpc")!="2.0" or not isinstance(message.get("method"),str):
+            return self.mcp_error(message.get("id") if isinstance(message,dict) else None,-32600,"Invalid Request",status=400)
+        method=message["method"]; request_id=message.get("id")
+        params=message.get("params") or {}
+        # MCP notifications have no request ID and must not receive a JSON-RPC response.
+        if request_id is None:
+            self.sendj(202,{"ok":True})
+            return
+        if method=="initialize":
+            return self.mcp_result(request_id,{
+                "protocolVersion":"2025-03-26",
+                "capabilities":{"tools":{"listChanged":False}},
+                "serverInfo":{"name":"codein-termux","version":"1.1.0"},
+                "instructions":"Local Codein Termux tools. Execute only user-authorized actions. Never expose local credential values."
+            })
+        if method=="ping": return self.mcp_result(request_id,{})
+        if method=="tools/list":
+            return self.mcp_result(request_id,{"tools":[
+                {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. Commands may change files or perform network actions; use only for the user's task.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
+                {"name":"agent_room_get","description":"Read the shared Codein Agent Room context, workspace state, recent events, sessions, and skills. Credential names only; secret values are never returned.","inputSchema":{"type":"object","properties":{} }},
+                {"name":"credentials_list","description":"List names of locally stored credentials without revealing their values.","inputSchema":{"type":"object","properties":{} }},
+                {"name":"provider_models_list","description":"List available model IDs from a supported provider using a supplied API key. Do not store the key with this tool.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}}
+            ]})
+        if method=="tools/call":
+            name=str(params.get("name","")); args=params.get("arguments") or {}
+            try:
+                if name=="termux_exec":
+                    command=str(args.get("command","")).strip()
+                    timeout=max(1,min(int(args.get("timeout",120)),900))
+                    if not command: raise ValueError("Command is empty")
+                    event("command_started",{"command":command[:500]}); start=time.monotonic()
+                    try:
+                        run=subprocess.run(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),capture_output=True,text=True,timeout=timeout,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)})
+                        result={"exit_code":run.returncode,"stdout":run.stdout[-100000:],"stderr":run.stderr[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
+                    except subprocess.TimeoutExpired as e:
+                        result={"exit_code":124,"error":"Command timed out","stdout":str(e.stdout or "")[-100000:],"stderr":str(e.stderr or "")[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
+                    event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
+                elif name=="agent_room_get":
+                    journal=EVENTS/"journal.jsonl"; lines=journal.read_text(encoding="utf-8").splitlines()[-25:] if journal.exists() else []
+                    sessions=[]
+                    for file in sorted(SESSIONS.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True)[:5]:
+                        item=readj(file,{})
+                        sessions.append({"id":item.get("id"),"title":item.get("title"),"summary":str(item.get("summary",""))[-1800:],"next_action":item.get("next_action")})
+                    events=[json.loads(line) for line in lines if line.strip()]
+                    skills={f.stem:f.read_text(encoding="utf-8")[:10000] for f in (ROOT/"skills").glob("*.md")}
+                    room_file=ROOT/"ROOM.md"
+                    result={"root":str(ROOT),"workspace":str(WORKSPACE),"room":room_file.read_text(encoding="utf-8") if room_file.exists() else "","state":readj(ROOT/"state.json",{}),"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file()),"events":events,"sessions":sessions,"skills":skills}
+                elif name=="credentials_list":
+                    result={"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file())}
+                elif name=="provider_models_list":
+                    status,result=discover_provider_models(args.get("provider"),args.get("api_key"))
+                    if status!=200: raise RuntimeError(result.get("error","Provider model discovery failed"))
+                else:
+                    return self.mcp_error(request_id,-32602,"Unknown tool: "+name)
+                return self.mcp_result(request_id,{"content":[{"type":"text","text":json.dumps(result,ensure_ascii=False)}],"isError":False})
+            except Exception as exc:
+                return self.mcp_result(request_id,{"content":[{"type":"text","text":str(exc)[:1500]}],"isError":True})
+        return self.mcp_error(request_id,-32601,"Method not found")
+
     def do_POST(self):
+        if urlparse(self.path).path=="/mcp":
+            return self.handle_mcp()
         if not self.auth(): return self.sendj(401,{"ok":False,"error":"Authorization required"})
         p=urlparse(self.path).path
         try: data=self.body()
