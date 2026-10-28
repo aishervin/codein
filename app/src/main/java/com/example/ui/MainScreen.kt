@@ -1699,6 +1699,9 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
     var savedKeys by remember { mutableStateOf(emptyList<String>()) }
     var status by remember { mutableStateOf("اتصال ترموکس هنوز برقرار نشده") }
     var output by remember { mutableStateOf("") }
+    var terminalCommand by remember { mutableStateOf("") }
+    var terminalOutput by remember { mutableStateOf("") }
+    var skillNames by remember { mutableStateOf(emptyList<String>()) }
     var busy by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -1734,9 +1737,11 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                                 .onSuccess {
                                     status = "متصل · " + it.first.optString("service", "Termux")
                                     savedKeys = it.third
+                                    skillNames = it.second.optJSONObject("skills")?.keys()?.asSequence()?.toList().orEmpty().sorted()
                                     onRoomContextLoaded(it.second)
                                     output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
-                                        "\\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" })
+                                        "\\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" }) +
+                                        "\\nSkills: " + skillNames.joinToString().ifBlank { "none installed" }
                                 }
                                 .onFailure { status = "اتصال ناموفق: " + (it.message ?: "خطای نامشخص") }
                             busy = false
@@ -1748,6 +1753,57 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         clipboard.setPrimaryClip(ClipData.newPlainText("Codein Termux install", installCommand))
                         output = "دستور نصب در کلیپ‌بورد کپی شد. در Termux آن را Paste و اجرا کن:\n\n" + installCommand + "\n\nبعد از نصب، سرور محلی را با این دستور اجرا کن:\npython ~/.codein/server.py\n\nتوکن اتصال را از ~/.codein/config.json بردار و فقط یک‌بار در همین صفحه وارد کن. آدرس مدل‌های Gemini، GPT، DeepSeek و سرویس‌های دیگر از قبل تنظیم شده؛ لازم نیست endpoint آن‌ها را دستی وارد کنی."
                     }) { Text("کپی دستور نصب") }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
+                Text("TERMINAL · اجرای مستقیم در Termux", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                OutlinedTextField(
+                    value = terminalCommand,
+                    onValueChange = { terminalCommand = it },
+                    label = { Text("دستور شل") },
+                    placeholder = { Text("pwd && ls -la") },
+                    singleLine = false,
+                    minLines = 1,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    enabled = !busy && terminalCommand.isNotBlank() && token.isNotBlank(),
+                    onClick = {
+                        busy = true
+                        client.baseUrl = baseUrl
+                        client.bearerToken = token
+                        val command = terminalCommand
+                        scope.launch {
+                            runCatching {
+                                client.health()
+                                client.execute(command, 120)
+                            }.onSuccess { result ->
+                                terminalOutput = buildString {
+                                    append("exit code: ").append(result.optInt("exit_code", -1)).append("\\n")
+                                    if (result.optString("stdout").isNotBlank()) append(result.optString("stdout"))
+                                    if (result.optString("stderr").isNotBlank()) append("\\nSTDERR:\\n").append(result.optString("stderr"))
+                                    if (result.has("error")) append("\\nERROR: ").append(result.optString("error"))
+                                }.takeLast(7000)
+                                status = "متصل · فرمان اجرا شد"
+                            }.onFailure { error ->
+                                status = "خطای ترمینال: " + (error.message ?: "خطای نامشخص")
+                                terminalOutput = status
+                            }
+                            busy = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (busy) "در حال اجرا…" else "اجرای دستور") }
+                if (terminalOutput.isNotBlank()) {
+                    Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                        Text(terminalOutput, color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
+                    }
+                }
+                Text("SKILLS · مهارت‌های در دسترس", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                if (skillNames.isEmpty()) {
+                    Text("برای نمایش مهارت‌ها ابتدا اتصال Termux را بزن.", color = TextMuted, fontSize = 11.sp)
+                } else {
+                    Text(skillNames.joinToString("  ·  "), color = TextMuted, fontSize = 11.sp)
                 }
                 Text("مدل‌های هوش مصنوعی", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 var aiProviderId by remember { mutableStateOf("gemini") }
