@@ -135,6 +135,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.R
+import com.example.BuildConfig
 import com.example.ui.components.CodeinChatBridge
 import com.example.ui.components.CodeinSettingsSheet
 import com.example.ui.theme.NeonOrange
@@ -1795,7 +1796,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
     var terminalCommand by remember { mutableStateOf("") }
     var terminalOutput by remember { mutableStateOf("") }
     var skillNames by remember { mutableStateOf(emptyList<String>()) }
-    var composioKey by remember { mutableStateOf("") }
+    var composioKey by remember { mutableStateOf(BuildConfig.COMPOSIO_API_KEY) }
     var composioStatus by remember { mutableStateOf("Composio هنوز پیکربندی نشده") }
     var composioTools by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
     var busy by remember { mutableStateOf(false) }
@@ -1878,8 +1879,8 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
                 Text("COMPOSIO · اتصال سرویس‌ها", color = NeonOrangeSoft, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                Text("ابزارهای واقعی سرویس‌های متصل را از Composio دریافت کن؛ کلید فقط در Termux ذخیره می‌شود.", color = TextMuted, fontSize = 11.sp)
-                OutlinedTextField(value = composioKey, onValueChange = { composioKey = it }, label = { Text("Composio Consumer Key (ck_…)") }, placeholder = { Text("ck_…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text(if (BuildConfig.COMPOSIO_API_KEY.isNotBlank()) "کلید Composio از GitHub Actions داخل این نسخه تنظیم شده است؛ برای اتصال فقط دکمه را بزن." else "کلید Composio را وارد کن یا در GitHub Actions به‌عنوان COMPOSIO_API_KEY ذخیره کن.", color = TextMuted, fontSize = 11.sp)
+                if (BuildConfig.COMPOSIO_API_KEY.isBlank()) OutlinedTextField(value = composioKey, onValueChange = { composioKey = it }, label = { Text("Composio Consumer Key (ck_…)") }, placeholder = { Text("ck_…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(enabled = !busy && composioKey.trim().startsWith("ck_"), onClick = {
                         busy = true
