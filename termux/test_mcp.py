@@ -75,7 +75,7 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(status, 202)
         _, response = self.rpc("tools/list")
         names = {tool["name"] for tool in response["result"]["tools"]}
-        self.assertTrue({"termux_exec", "agent_room_get", "provider_models_list", "provider_chat"} <= names)
+        self.assertTrue({"termux_exec", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_chat"} <= names)
 
     def test_local_agent_room_tools(self):
         saved = self.call_tool("credential_save", {"name": "test_key", "value": "unit-secret"})

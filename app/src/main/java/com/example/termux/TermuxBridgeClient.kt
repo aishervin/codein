@@ -86,6 +86,14 @@ class TermuxBridgeClient(context: Context) {
         return (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank)
     }
 
+    /** Discover models using the provider API key already stored in Termux. */
+    suspend fun discoverSavedModels(provider: String): List<String> {
+        require(provider.isNotBlank()) { "Select an AI provider first" }
+        val result = mcpTool("provider_models_saved_list", JSONObject().put("provider", provider), 45)
+        val array = result.optJSONArray("models") ?: JSONArray()
+        return (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank)
+    }
+
     /** Run provider chat through the local MCP server; its tool loop dispatches native MCP tools. */
     suspend fun chat(provider: String, model: String, messages: JSONArray, system: String): JSONObject {
         val result = mcpTool("provider_chat", JSONObject()
