@@ -76,13 +76,23 @@ class TermuxBridgeClient(context: Context) {
         return (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank)
     }
 
-    suspend fun chat(provider: String, model: String, messages: JSONArray, system: String): JSONObject =
-        request("POST", "/api/chat", JSONObject()
+    /** Run provider chat through the local MCP server; its tool loop dispatches native MCP tools. */
+    suspend fun chat(provider: String, model: String, messages: JSONArray, system: String): JSONObject {
+        val result = mcpTool("provider_chat", JSONObject()
             .put("provider", provider)
             .put("model", model)
             .put("messages", messages)
             .put("system", system)
-            .put("timeout", 120))
+            .put("timeout", 120), 180)
+        if (!result.optBoolean("ok", true)) {
+            if (result.optString("error") == "missing_api_key") {
+                throw MissingProviderCredential(result.optString("credential_name"), result.optString("provider_name"))
+            }
+            throw IllegalStateException(result.optString("error").ifBlank { "MCP provider chat failed" } +
+                result.optString("detail").takeIf { it.isNotBlank() }?.let { ": " + it.take(600) }.orEmpty())
+        }
+        return result
+    }
 
     suspend fun credentialNames(): List<String> {
         val result = request("GET", "/api/keys")
