@@ -13,7 +13,7 @@ pkg install -y curl
 curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash
 ```
 
-The bootstrap installs `python git openssh curl`, initializes `~/.codein`, creates a local bearer token, and starts the MCP service in the background with a restart loop. **Do not separately run `python ~/.codein/server.py` after bootstrap**; it can collide with the already-running server on port 8765.
+The bootstrap installs `python git openssh curl`, initializes `~/.codein`, creates a local bearer token only on first setup, and starts the MCP service in the background with a restart loop. Re-running the installer updates the bridge while preserving the paired app's token. **Do not separately run `python ~/.codein/server.py` after bootstrap**; it can collide with the already-running server on port 8765.
 
 Copy the private token printed by the installer into Codein's Termux connection dialog. The service binds only to `127.0.0.1`; it is not exposed to the LAN. Keep Termux alive while Codein is working. If Android suspends the process, the bootstrap's supervisor restarts the Python server when it exits.
 
