@@ -453,7 +453,7 @@ private fun MainChatScreen(
                         }
                     }
                     .onFailure { error ->
-                        termuxConnected = false
+                        if (error is java.io.IOException) termuxConnected = false
                         if (error is com.example.termux.MissingProviderCredential) {
                             pendingCredentialName = error.credentialName
                             messages.add(ChatMessage(user = false, text = "برای استفاده از ${error.providerName} کلید API لازم است. کلید را همین‌جا در چت بفرست؛ برنامه آن را محلی در Termux ذخیره می‌کند و مقدارش را در تاریخچه نشان نمی‌دهد. فقط مقدار کلید را در پیام بعدی بفرست."))
