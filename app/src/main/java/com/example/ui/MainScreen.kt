@@ -73,6 +73,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -81,6 +82,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -192,22 +194,10 @@ private data class CodeinModel(
     val providerId: String? = null
 )
 
+// Keep the original built-in WebView modes available; external model IDs are loaded from the provider API.
 private val codeinModels = listOf(
-    CodeinModel("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini"),
-    CodeinModel("gemini-3.7-flash", "Gemini 3.7 Flash", "gemini"),
-    CodeinModel("gemini-3.1-pro-preview", "Gemini 3.1 Pro", "gemini"),
-    CodeinModel("gpt-6-luna", "GPT-6 Luna", "openai"),
-    CodeinModel("gpt-6.1-terra", "GPT-6.1 Terra", "openai"),
-    CodeinModel("deepseek-flash", "DeepSeek Flash", "deepseek"),
-    CodeinModel("deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek"),
-    CodeinModel("claude-haiku-4-5-20251001", "Claude Haiku 4.5", "anthropic"),
-    CodeinModel("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic"),
-    CodeinModel("claude-opus-4-8", "Claude Opus 4.8", "anthropic"),
-    CodeinModel("openai/gpt-6-luna", "OpenRouter · GPT", "openrouter"),
-    CodeinModel("deepseek/deepseek-flash", "OpenRouter · DeepSeek", "openrouter"),
-    CodeinModel("mistral-small-latest", "Mistral Small", "mistral"),
-    CodeinModel("grok-2-latest", "Grok", "xai"),
-    CodeinModel("llama-3.3-70b-versatile", "Groq Llama", "groq")
+    CodeinModel("zero", "ZERO"),
+    CodeinModel("hero", "HERO")
 )
 
 private const val MAX_ATTACHMENT_BYTES = 1024 * 1024
@@ -282,6 +272,7 @@ private fun MainChatScreen(
     var attachment by remember { mutableStateOf<CodeinAttachment?>(null) }
     var pendingDownload by remember { mutableStateOf<DownloadPayload?>(null) }
     var selectedModel by remember { mutableStateOf(codeinModels.first()) }
+    val availableModels = remember { mutableStateListOf<CodeinModel>().apply { addAll(codeinModels) } }
     var showSettings by remember { mutableStateOf(false) }
     var showTermuxRoom by remember { mutableStateOf(false) }
     var sharedRoomContext by remember { mutableStateOf("") }
@@ -789,7 +780,14 @@ private fun MainChatScreen(
     }
 
     if (showTermuxRoom) {
-        TermuxAgentRoomDialog(onDismiss = { showTermuxRoom = false }, onRoomContextLoaded = { sharedRoomContext = it.toString() })
+        TermuxAgentRoomDialog(
+            onDismiss = { showTermuxRoom = false },
+            onRoomContextLoaded = { sharedRoomContext = it.toString() },
+            onModelSelected = { model ->
+                if (availableModels.none { it.id == model.id && it.providerId == model.providerId }) availableModels.add(model)
+                selectedModel = model
+            }
+        )
     }
 
     if (showHistory) {
@@ -901,7 +899,7 @@ private fun CodeinHeader(
                 ConnectionStatus(isConnected, connectionFailed, onRetry)
             }
             Box(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
-                ModelPicker(selectedModel, onSelectModel)
+                ModelPicker(selectedModel, availableModels, onSelectModel)
             }
         }
     }
@@ -937,7 +935,7 @@ private fun ConnectionStatus(isConnected: Boolean, connectionFailed: Boolean, on
 }
 
 @Composable
-private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel) -> Unit) {
+private fun ModelPicker(selectedModel: CodeinModel, models: List<CodeinModel>, onSelectModel: (CodeinModel) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         Row(
@@ -961,7 +959,7 @@ private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel)
             Text("⌄", color = TextMuted, fontSize = 16.sp)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            codeinModels.forEach { model ->
+            models.forEach { model ->
                 DropdownMenuItem(
                     text = {
                         Column {
@@ -1612,7 +1610,7 @@ private fun CodeinHistoryDialog(
 }
 
 @Composable
-private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (JSONObject) -> Unit) {
+private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (JSONObject) -> Unit, onModelSelected: (CodeinModel) -> Unit) {
     val context = LocalContext.current
     val client = remember(context) { TermuxBridgeClient(context) }
     val scope = rememberCoroutineScope()
@@ -1673,41 +1671,64 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         output = "دستور نصب در کلیپ‌بورد کپی شد. در Termux آن را Paste و اجرا کن:\n\n" + installCommand + "\n\nبعد از نصب، سرور محلی را با این دستور اجرا کن:\npython ~/.codein/server.py\n\nتوکن اتصال را از ~/.codein/config.json بردار و فقط یک‌بار در همین صفحه وارد کن. آدرس مدل‌های Gemini، GPT، DeepSeek و سرویس‌های دیگر از قبل تنظیم شده؛ لازم نیست endpoint آن‌ها را دستی وارد کنی."
                     }) { Text("کپی دستور نصب") }
                 }
-                Text("کلیدهای سرویس‌ها", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                Text("سرویس را انتخاب کن تا نام استاندارد کلید پر شود؛ مقدار کلید فقط یک‌بار وارد می‌شود و محلی در Termux ذخیره می‌شود.", color = TextMuted, fontSize = 11.sp)
-                var serviceMenuExpanded by remember { mutableStateOf(false) }
-                val serviceKeyOptions = listOf(
-                    "GitHub · token" to "github_token",
-                    "Cloudflare · API token" to "cloudflare_api_token",
-                    "Telegram · bot token" to "telegram_bot_token",
-                    "Google Gemini · API key" to "gemini_api_key",
-                    "OpenAI · API key" to "openai_api_key",
-                    "Anthropic · API key" to "anthropic_api_key",
-                    "DeepSeek · API key" to "deepseek_api_key",
-                    "OpenRouter · API key" to "openrouter_api_key",
-                    "Mistral · API key" to "mistral_api_key",
-                    "xAI · API key" to "xai_api_key",
-                    "Groq · API key" to "groq_api_key"
+                Text("مدل‌های هوش مصنوعی", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                var aiProviderId by remember { mutableStateOf("gemini") }
+                var aiProviderMenuExpanded by remember { mutableStateOf(false) }
+                var aiModelMenuExpanded by remember { mutableStateOf(false) }
+                var aiKeyValue by remember { mutableStateOf("") }
+                var aiModels by remember { mutableStateOf(emptyList<String>()) }
+                var selectedAiModel by remember { mutableStateOf("") }
+                var providerHelp by remember { mutableStateOf(false) }
+                val aiProviders = listOf(
+                    "Google Gemini" to "gemini",
+                    "OpenAI" to "openai",
+                    "DeepSeek" to "deepseek",
+                    "Anthropic Claude" to "anthropic",
+                    "OpenRouter" to "openrouter",
+                    "Mistral" to "mistral",
+                    "xAI Grok" to "xai",
+                    "Groq" to "groq"
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("توکن سرویس را وارد کن؛ مدل‌ها از API همان سرویس خوانده می‌شوند.", color = TextMuted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { providerHelp = true }, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.Default.Info, contentDescription = "راهنمای اتصال مدل", tint = TextMuted, modifier = Modifier.size(18.dp))
+                    }
+                }
+                if (providerHelp) {
+                    AlertDialog(
+                        onDismissRequest = { providerHelp = false },
+                        title = { Text("راهنمای مدل‌ها") },
+                        text = { Text("سرویس هوش را انتخاب کن و API key همان سرویس را وارد کن. «استعلام مدل‌ها» فهرست واقعی قابل‌دسترسی با همان کلید را از API سرویس می‌گیرد. سپس یک مدل را انتخاب و ذخیره کن. شناسه مدل ساختگی وارد نمی‌شود؛ کلید فقط در خزانه محلی Termux ذخیره می‌شود.") },
+                        confirmButton = { TextButton(onClick = { providerHelp = false }) { Text("باشه") }
+                        }
+                    )
+                }
                 Box {
-                    OutlinedButton(onClick = { serviceMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(serviceKeyOptions.firstOrNull { it.second == keyName }?.first ?: keyName, maxLines = 1)
+                    OutlinedButton(onClick = { aiProviderMenuExpanded = true }, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
+                        Text(aiProviders.firstOrNull { it.second == aiProviderId }?.first ?: aiProviderId, maxLines = 1)
                         Text("  ▾")
                     }
-                    DropdownMenu(expanded = serviceMenuExpanded, onDismissRequest = { serviceMenuExpanded = false }) {
-                        serviceKeyOptions.forEach { (label, value) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = { keyName = value; serviceMenuExpanded = false }
-                            )
+                    DropdownMenu(expanded = aiProviderMenuExpanded, onDismissRequest = { aiProviderMenuExpanded = false }) {
+                        aiProviders.forEach { (label, id) ->
+                            DropdownMenuItem(text = { Text(label) }, onClick = {
+                                aiProviderId = id
+                                aiModels = emptyList()
+                                selectedAiModel = ""
+                                aiProviderMenuExpanded = false
+                            })
                         }
                     }
                 }
-                Text(if (status.startsWith("متصل")) "کلیدهای ذخیره‌شده: " + savedKeys.joinToString().ifBlank { "هنوز کلیدی ذخیره نشده" } else "برای فعال‌شدن ذخیره، ابتدا اتصال پل محلی را برقرار کن.", color = TextMuted, fontSize = 11.sp)
-                OutlinedTextField(value = keyName, onValueChange = { keyName = it }, label = { Text("نام کلید (قابل ویرایش)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = keyValue, onValueChange = { keyValue = it }, label = { Text("مقدار کلید / توکن سرویس") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = aiKeyValue,
+                    onValueChange = { aiKeyValue = it; aiModels = emptyList(); selectedAiModel = "" },
+                    label = { Text("API key سرویس انتخاب‌شده") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Button(
-                    enabled = !busy && keyName.isNotBlank() && keyValue.isNotBlank() && token.isNotBlank(),
+                    enabled = !busy && token.isNotBlank() && aiKeyValue.isNotBlank(),
                     onClick = {
                         busy = true
                         client.baseUrl = baseUrl
@@ -1715,22 +1736,118 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         scope.launch {
                             runCatching {
                                 client.health()
-                                client.saveCredential(keyName, keyValue)
-                                client.roomContext()
+                                client.discoverModels(aiProviderId, aiKeyValue)
+                            }.onSuccess { models ->
+                                aiModels = models
+                                selectedAiModel = models.firstOrNull().orEmpty()
+                                status = "استعلام موفق · ${models.size} مدل در دسترس"
+                                output = "فهرست مدل‌ها از API زنده سرویس دریافت شد؛ هیچ شناسه‌ای از پیش حدس زده نشده."
+                            }.onFailure { error ->
+                                aiModels = emptyList()
+                                selectedAiModel = ""
+                                status = "استعلام مدل ناموفق: " + (error.message ?: "خطای نامشخص")
                             }
-                                .onSuccess { room ->
-                                    keyValue = ""
-                                    savedKeys = (savedKeys + keyName).distinct()
-                                    onRoomContextLoaded(room)
-                                    status = "متصل · کلید ذخیره شد"
-                                    output = "کلید با موفقیت در Termux ذخیره شد."
-                                }
-                                .onFailure { status = "ذخیره ناموفق: " + (it.message ?: "خطای نامشخص") }
                             busy = false
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("ذخیرهٔ امن کلید در Termux") }
+                ) { Text(if (busy) "در حال استعلام…" else "استعلام مدل‌های در دسترس") }
+                if (aiModels.isNotEmpty()) {
+                    Box {
+                        OutlinedButton(onClick = { aiModelMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text(selectedAiModel.ifBlank { "انتخاب مدل" }, maxLines = 1)
+                            Text("  ▾")
+                        }
+                        DropdownMenu(expanded = aiModelMenuExpanded, onDismissRequest = { aiModelMenuExpanded = false }) {
+                            aiModels.forEach { modelId ->
+                                DropdownMenuItem(text = { Text(modelId) }, onClick = {
+                                    selectedAiModel = modelId
+                                    aiModelMenuExpanded = false
+                                })
+                            }
+                        }
+                    }
+                    Button(
+                        enabled = !busy && selectedAiModel.isNotBlank() && aiKeyValue.isNotBlank(),
+                        onClick = {
+                            busy = true
+                            scope.launch {
+                                runCatching {
+                                    client.saveCredential("${aiProviderId}_api_key", aiKeyValue)
+                                    client.roomContext()
+                                }.onSuccess { room ->
+                                    val providerName = aiProviders.firstOrNull { it.second == aiProviderId }?.first ?: aiProviderId
+                                    onRoomContextLoaded(room)
+                                    onModelSelected(CodeinModel(selectedAiModel, "$providerName · $selectedAiModel", aiProviderId))
+                                    savedKeys = (savedKeys + "${aiProviderId}_api_key").distinct()
+                                    aiKeyValue = ""
+                                    status = "مدل انتخاب شد · $selectedAiModel"
+                                    output = "کلید در خزانه محلی ذخیره شد و مدل انتخاب‌شده فعال شد."
+                                }.onFailure { error ->
+                                    status = "ذخیره یا انتخاب مدل ناموفق: " + (error.message ?: "خطای نامشخص")
+                                }
+                                busy = false
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("ذخیرهٔ کلید و فعال‌کردن مدل") }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
+                Text("توکن ابزارها و سرویس‌های دیگر", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                var serviceMenuExpanded by remember { mutableStateOf(false) }
+                var serviceTokenValue by remember { mutableStateOf("") }
+                val serviceKeyOptions = listOf(
+                    "GitHub · token" to "github_token",
+                    "Cloudflare · API token" to "cloudflare_api_token",
+                    "Telegram · bot token" to "telegram_bot_token"
+                )
+                Box {
+                    OutlinedButton(onClick = { serviceMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(serviceKeyOptions.firstOrNull { it.second == keyName }?.first ?: serviceKeyOptions.first().first, maxLines = 1)
+                        Text("  ▾")
+                    }
+                    DropdownMenu(expanded = serviceMenuExpanded, onDismissRequest = { serviceMenuExpanded = false }) {
+                        serviceKeyOptions.forEach { (label, value) ->
+                            DropdownMenuItem(text = { Text(label) }, onClick = {
+                                keyName = value
+                                serviceMenuExpanded = false
+                            })
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = serviceTokenValue,
+                    onValueChange = { serviceTokenValue = it },
+                    label = { Text("توکن سرویس") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    enabled = !busy && serviceTokenValue.isNotBlank() && token.isNotBlank(),
+                    onClick = {
+                        busy = true
+                        client.baseUrl = baseUrl
+                        client.bearerToken = token
+                        scope.launch {
+                            runCatching {
+                                client.health()
+                                client.saveCredential(keyName, serviceTokenValue)
+                                client.roomContext()
+                            }.onSuccess { room ->
+                                serviceTokenValue = ""
+                                savedKeys = (savedKeys + keyName).distinct()
+                                onRoomContextLoaded(room)
+                                status = "توکن سرویس ذخیره شد"
+                                output = "توکن با نام استاندارد در خزانه محلی Termux ذخیره شد."
+                            }.onFailure { error ->
+                                status = "ذخیره ناموفق: " + (error.message ?: "خطای نامشخص")
+                            }
+                            busy = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("ذخیرهٔ توکن سرویس") }
                 if (output.isNotBlank()) {
                     Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Text(output.takeLast(5000), color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
