@@ -592,18 +592,18 @@ private fun MainChatScreen(
         sendRequest(message.text, message.requestText, message.attachmentName, history)
     }
 
-    fun handleTermuxPermission(message: ChatMessage, allow: Boolean) {
+    fun handleTermuxPermission(message: ChatMessage, reply: String) {
         val index = messages.indexOf(message)
         if (index < 0 || message.kind != "permission") return
         messages.removeAt(index)
-        if (!allow) {
+        if (reply == "reject") {
             messages.add(ChatMessage(user = false, text = "اجرای فرمان توسط کاربر رد شد؛ هیچ دستوری اجرا نشد."))
             return
         }
         isStreaming = true
         agentScope.launch {
             runCatching {
-                termuxClient.approveCommand(message.command)
+                termuxClient.approveCommand(message.command, always = reply == "always")
                 termuxClient.execute(message.command)
             }
                 .onSuccess { result ->
@@ -881,8 +881,8 @@ private fun MainChatScreen(
                                     onCopy = ::copyToClipboard,
                                     onRetry = ::retryMessage,
                                     onDownload = ::downloadText,
-                                    onApproveCommand = { handleTermuxPermission(it, true) },
-                                    onDenyCommand = { handleTermuxPermission(it, false) }
+                                    onApproveCommand = { message, always -> handleTermuxPermission(message, if (always) "always" else "once") },
+                                    onDenyCommand = { handleTermuxPermission(it, "reject") }
                                 )
                             }
                             if (isStreaming) {
@@ -897,8 +897,8 @@ private fun MainChatScreen(
                                          onCopy = ::copyToClipboard,
                                          onRetry = ::retryMessage,
                                          onDownload = ::downloadText,
-                                         onApproveCommand = { handleTermuxPermission(it, true) },
-                                         onDenyCommand = { handleTermuxPermission(it, false) }
+                                         onApproveCommand = { message, always -> handleTermuxPermission(message, if (always) "always" else "once") },
+                                         onDenyCommand = { handleTermuxPermission(it, "reject") }
                                      )
                                  }
                              }
@@ -1250,7 +1250,7 @@ private fun ChatBubble(
     onCopy: (String) -> Unit,
     onRetry: (ChatMessage) -> Unit,
     onDownload: (String, String) -> Unit,
-    onApproveCommand: (ChatMessage) -> Unit = {},
+    onApproveCommand: (ChatMessage, Boolean) -> Unit = { _, _ -> },
     onDenyCommand: (ChatMessage) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -1304,7 +1304,8 @@ private fun ChatBubble(
                     when (message.kind) {
                         "permission" -> TermuxPermissionPanel(
                             command = message.command,
-                            onAllow = { onApproveCommand(message) },
+                            onAllowOnce = { onApproveCommand(message, false) },
+                            onAlwaysAllow = { onApproveCommand(message, true) },
                             onDeny = { onDenyCommand(message) }
                         )
                         "tool" -> TerminalTracePanel(
