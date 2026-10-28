@@ -430,7 +430,14 @@ private fun MainChatScreen(
         suppressDirectiveOutput = false
         isStreaming = true
         val target = webView
-        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM (compact JSON): " + compactAgentRoomContext(sharedRoomContext) + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
+        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else {
+            val shared = " SHARED LOCAL AGENT ROOM (compact JSON): " + compactAgentRoomContext(sharedRoomContext)
+            if (selectedModel.providerId != null) {
+                shared + " You have native MCP tools available: termux_exec, agent_room_get, credentials_list, and provider_models_list. Use native tool calls for Termux operations; never emit CODEIN_TERMUX_EXEC or CODEIN_SAVE_KEY text directives. Use existing named credentials without exposing values. If a required credential is missing, ask for it explicitly; the app stores user-provided secrets in the local Termux vault and redacts them from chat history. Never echo or log secrets."
+            } else {
+                shared + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
+            }
+        }
         val selectedProviderId = selectedModel.providerId
         val selectedModelId = selectedModel.id
         val selectedModelLabel = selectedModel.suffix
