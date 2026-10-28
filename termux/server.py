@@ -145,7 +145,7 @@ def dispatch_mcp_tool(name, args):
             policy=readj(policy_path,{"commands":[]})
             commands=set(str(item) for item in policy.get("commands",[]) if isinstance(item,str))
             commands.add(command)
-            policy_path.write_text(json.dumps({"commands":sorted(commands),"updated_at":now()},ensure_ascii=False,indent=2)+"\\n",encoding="utf-8")
+            policy_path.write_text(json.dumps({"commands":sorted(commands),"updated_at":now()},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
             policy_path.chmod(0o600)
             event("command_always_allowed",{"command":command[:500]})
             return {"ok":True,"approved_always":True}
