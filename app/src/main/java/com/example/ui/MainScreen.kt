@@ -501,6 +501,17 @@ private fun MainChatScreen(
             agentScope.launch {
                 runCatching { termuxClient.chat(selectedProviderId, selectedModelId, requestMessages, effectiveSystemPrompt) }
                     .onSuccess { result ->
+                        if (result.optBoolean("permission_required")) {
+                            val command = result.optString("command")
+                            messages.add(ChatMessage(
+                                user = false,
+                                text = "اجازه اجرای فرمان در Termux لازم است.",
+                                kind = "permission",
+                                command = command
+                            ))
+                            isStreaming = false
+                            return@onSuccess
+                        }
                         val answer = result.optString("content")
                         val reasoningMatch = Regex("""<(?:think|analysis|reasoning)>\\s*([\\s\\S]*?)\\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).find(answer)
                         val visibleAnswer = Regex("""<(?:think|analysis|reasoning)>\\s*[\\s\\S]*?\\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).replace(answer, "").trim()
@@ -591,7 +602,10 @@ private fun MainChatScreen(
         }
         isStreaming = true
         agentScope.launch {
-            runCatching { termuxClient.execute(message.command) }
+            runCatching {
+                termuxClient.approveCommand(message.command)
+                termuxClient.execute(message.command)
+            }
                 .onSuccess { result ->
                     val exitCode = result.optInt("exit_code", -1)
                     val stdout = result.optString("stdout").takeLast(12000)
