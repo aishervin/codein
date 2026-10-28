@@ -38,7 +38,7 @@ class TermuxBridgeClient(context: Context) {
         val tools = mcpRequest("tools/list", JSONObject())
         val toolArray = tools.optJSONArray("tools") ?: JSONArray()
         val toolNames = (0 until toolArray.length()).mapNotNull { toolArray.optJSONObject(it)?.optString("name") }.toSet()
-        val requiredTools = setOf("termux_exec", "agent_room_get", "provider_models_list", "provider_chat")
+        val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_chat")
         val missing = requiredTools - toolNames
         check(missing.isEmpty()) {
             "The Termux MCP server is outdated (missing " + missing.joinToString() + "). Re-run the Codein Termux installer."
@@ -127,6 +127,12 @@ class TermuxBridgeClient(context: Context) {
         requireValidName(name)
         require(value.isNotBlank()) { "Credential value cannot be empty" }
         return mcpTool("credential_save", JSONObject().put("name", name).put("value", value))
+    }
+
+    /** Approve one exact command for a single execution after the user confirms it in the app. */
+    suspend fun approveCommand(command: String): JSONObject {
+        require(command.isNotBlank()) { "Command cannot be empty" }
+        return mcpTool("termux_command_approve", JSONObject().put("command", command))
     }
 
     /** Execute a local shell command using the standard MCP tools/call method. */
