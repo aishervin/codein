@@ -28,12 +28,25 @@ class TermuxBridgeClient(context: Context) {
 
     val isConfigured: Boolean get() = bearerToken.isNotBlank() && baseUrl.startsWith("http://127.0.0.1")
 
-    suspend fun health(): JSONObject = request("GET", "/health")
+    /** Initialize MCP and confirm its tool catalog is reachable. */
+    suspend fun health(): JSONObject {
+        val init = mcpRequest("initialize", JSONObject()
+            .put("protocolVersion", "2025-03-26")
+            .put("capabilities", JSONObject())
+            .put("clientInfo", JSONObject().put("name", "Codein Android").put("version", "1.0.5")))
+        mcpNotification("notifications/initialized")
+        val tools = mcpRequest("tools/list", JSONObject())
+        return JSONObject()
+            .put("ok", true)
+            .put("service", init.optJSONObject("serverInfo")?.optString("name", "MCP Termux") ?: "MCP Termux")
+            .put("protocolVersion", init.optString("protocolVersion"))
+            .put("tools", tools.optJSONArray("tools") ?: JSONArray())
+    }
 
     suspend fun workspace(): JSONObject = request("GET", "/api/workspace")
 
-    /** Loads the shared room contract, state, recent events, sessions, and skills. */
-    suspend fun roomContext(): JSONObject = request("GET", "/api/room")
+    /** Read Agent Room through MCP tools/call, not a private REST endpoint. */
+    suspend fun roomContext(): JSONObject = mcpTool("agent_room_get", JSONObject())
 
     suspend fun providers(): List<TermuxProvider> {
         val result = request("GET", "/api/providers")
@@ -89,11 +102,12 @@ class TermuxBridgeClient(context: Context) {
         return request("POST", "/api/keys", JSONObject().put("name", name).put("value", value))
     }
 
+    /** Execute a local shell command using the standard MCP tools/call method. */
     suspend fun execute(command: String, timeoutSeconds: Int = 120): JSONObject {
         require(command.isNotBlank()) { "Command cannot be empty" }
-        return request("POST", "/api/exec", JSONObject()
+        return mcpTool("termux_exec", JSONObject()
             .put("command", command)
-            .put("timeout", timeoutSeconds.coerceIn(1, 900)))
+            .put("timeout", timeoutSeconds.coerceIn(1, 900)), timeoutSeconds.coerceIn(1, 900))
     }
 
     suspend fun saveSession(id: String, title: String, summary: String, nextAction: String = ""): JSONObject {
@@ -108,6 +122,69 @@ class TermuxBridgeClient(context: Context) {
         request("POST", "/api/events", JSONObject().put("kind", kind).put("data", JSONObject().put("summary", summary)))
 
     suspend fun updateState(fields: JSONObject): JSONObject = request("POST", "/api/state", fields)
+
+    private var mcpRequestId = 0
+
+    private suspend fun mcpRequest(method: String, params: JSONObject, timeoutSeconds: Int = 45): JSONObject =
+        withContext(Dispatchers.IO) {
+            check(bearerToken.isNotBlank()) { "MCP token is missing. Run the Termux installer and copy its local token." }
+            val id = synchronized(this@TermuxBridgeClient) { ++mcpRequestId }
+            val payload = JSONObject().put("jsonrpc", "2.0").put("id", id).put("method", method).put("params", params)
+            val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8_000
+                readTimeout = (timeoutSeconds.coerceAtMost(900) * 1000).coerceAtLeast(45_000)
+                setRequestProperty("Authorization", "Bearer " + bearerToken)
+                setRequestProperty("Accept", "application/json, text/event-stream")
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                doOutput = true
+            }
+            try {
+                connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                if (status !in 200..299) throw IllegalStateException("MCP HTTP " + status + ": " + text.take(700))
+                val response = JSONObject(text)
+                if (response.has("error")) {
+                    val error = response.optJSONObject("error") ?: JSONObject()
+                    throw IllegalStateException("MCP " + error.optInt("code") + ": " + error.optString("message"))
+                }
+                response.optJSONObject("result") ?: JSONObject()
+            } finally {
+                connection.disconnect()
+            }
+        }
+
+    private suspend fun mcpNotification(method: String) = withContext(Dispatchers.IO) {
+        val payload = JSONObject().put("jsonrpc", "2.0").put("method", method)
+        val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 8_000
+            readTimeout = 10_000
+            setRequestProperty("Authorization", "Bearer " + bearerToken)
+            setRequestProperty("Accept", "application/json, text/event-stream")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            doOutput = true
+        }
+        try {
+            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            if (connection.responseCode !in 200..299) throw IllegalStateException("MCP notification rejected")
+            connection.inputStream?.close()
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private suspend fun mcpTool(name: String, arguments: JSONObject, timeoutSeconds: Int = 45): JSONObject {
+        val result = mcpRequest("tools/call", JSONObject().put("name", name).put("arguments", arguments), timeoutSeconds)
+        if (result.optBoolean("isError")) {
+            val content = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty()
+            throw IllegalStateException(content.ifBlank { "MCP tool " + name + " failed" })
+        }
+        val content = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty()
+        return if (content.isBlank()) JSONObject() else JSONObject(content)
+    }
 
     private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject =
         withContext(Dispatchers.IO) {
