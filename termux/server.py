@@ -424,8 +424,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.sendj(200,result)
         return self.sendj(404,{"ok":False,"error":"Unknown endpoint"})
 
-if not TOKEN: raise SystemExit("Missing token. Re-run the Codein bootstrap to initialize ~/.codein/config.json.")
-print(f"[Codein] Local bridge: http://127.0.0.1:{PORT}")
-print(f"[Codein] Workspace: {WORKSPACE}")
-print("[Codein] Ctrl+C to stop.")
-ThreadingHTTPServer(("127.0.0.1",PORT),Handler).serve_forever()
+if __name__ == "__main__":
+    if not TOKEN: raise SystemExit("Missing token. Re-run the Codein bootstrap to initialize ~/.codein/config.json.")
+    print(f"[Codein] Local MCP endpoint: http://127.0.0.1:{PORT}/mcp")
+    print(f"[Codein] Workspace: {WORKSPACE}")
+    print("[Codein] Ctrl+C to stop.")
+    ThreadingHTTPServer(("127.0.0.1",PORT),Handler).serve_forever()
