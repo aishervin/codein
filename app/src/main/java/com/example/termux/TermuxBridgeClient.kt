@@ -69,10 +69,9 @@ class TermuxBridgeClient(context: Context) {
     suspend fun discoverModels(provider: String, apiKey: String): List<String> {
         require(provider.isNotBlank()) { "Select an AI provider first" }
         require(apiKey.isNotBlank()) { "Enter the provider API key first" }
-        val result = request("POST", "/api/providers/models", JSONObject()
+        val result = mcpTool("provider_models_list", JSONObject()
             .put("provider", provider)
-            .put("api_key", apiKey)
-            .put("timeout", 25))
+            .put("api_key", apiKey), 45)
         val array = result.optJSONArray("models") ?: JSONArray()
         return (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank)
     }
