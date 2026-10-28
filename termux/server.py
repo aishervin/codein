@@ -83,8 +83,25 @@ def discover_provider_models(pid, api_key):
     except Exception as e:
         return 502,{"ok":False,"error":"Provider model lookup failed","error_type":type(e).__name__}
 
+
+def composio_tool_catalog():
+    key_data=readj(KEYS/"composio_consumer_api_key.json",{})
+    key=str(key_data.get("value","")).strip()
+    if not key: return []
+    try:
+        remote=composio_connect.tools(key)
+        return [{"name":"composio__"+str(t["name"]),
+                 "description":"Composio connected-service tool. "+str(t.get("description",""))[:1000],
+                 "inputSchema":t.get("inputSchema") or {"type":"object","properties":{}}}
+                for t in remote if isinstance(t,dict) and t.get("name")]
+    except Exception as exc:
+        event("composio_tools_error",{"error":str(exc)[:250]})
+        return []
+
 def mcp_tools_catalog():
-    return [
+    local_tools = [
+        {"name":"composio_configure","description":"Save a Composio Connect consumer key in the private Termux credential vault. Never print the key.","inputSchema":{"type":"object","properties":{"consumer_api_key":{"type":"string","description":"Composio Connect consumer key (ck_...)"}}, "required":["consumer_api_key"]}},
+        {"name":"composio_tools_refresh","description":"Discover tools available from Composio Connect after apps have been connected.","inputSchema":{"type":"object","properties":{}}},
         {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. Use only for actions authorized by the user.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
         {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}},
@@ -96,9 +113,28 @@ def mcp_tools_catalog():
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
         {"name":"opencode_manage","description":"Manage OpenCode agent engine: install, run, or check status.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","status","stop"]},"args":{"type":"string"}},"required":["action"]}}
     ]
+    return local_tools + composio_tool_catalog()
 
 def dispatch_mcp_tool(name, args):
     args=args if isinstance(args,dict) else {}
+    if name=="composio_configure":
+        value=str(args.get("consumer_api_key","")).strip()
+        if not value.startswith("ck_") or len(value)<12: raise ValueError("A valid Composio Connect consumer key (ck_...) is required.")
+        secret_file=KEYS/"composio_consumer_api_key.json"
+        secret_file.write_text(json.dumps({"name":"composio_consumer_api_key","value":value,"updated_at":now()},ensure_ascii=False)+"\\n",encoding="utf-8")
+        secret_file.chmod(0o600)
+        event("composio_configured",{"configured":True})
+        return {"ok":True,"message":"Composio key saved locally. Call composio_tools_refresh to discover service tools."}
+    if name=="composio_tools_refresh":
+        tools=composio_tool_catalog()
+        if not tools: raise RuntimeError("No Composio tools found. Verify the consumer key and connect services in Composio.")
+        return {"ok":True,"count":len(tools),"tools":[{"name":t["name"],"description":t["description"][:180]} for t in tools]}
+    if name.startswith("composio__"):
+        key=str(readj(KEYS/"composio_consumer_api_key.json",{}).get("value","")).strip()
+        if not key: raise RuntimeError("Composio is not configured.")
+        result=composio_connect.call_tool(key,name[len("composio__"):],args)
+        event("composio_tool_called",{"tool":name})
+        return result
     if name=="termux_exec":
         command=str(args.get("command","")).strip()
         timeout=max(1,min(int(args.get("timeout",120)),900))
