@@ -52,6 +52,18 @@ class TermuxBridgeClient(context: Context) {
         }
     }
 
+    /** Query the provider's live model endpoint using the entered key without saving or logging it. */
+    suspend fun discoverModels(provider: String, apiKey: String): List<String> {
+        require(provider.isNotBlank()) { "Select an AI provider first" }
+        require(apiKey.isNotBlank()) { "Enter the provider API key first" }
+        val result = request("POST", "/api/providers/models", JSONObject()
+            .put("provider", provider)
+            .put("api_key", apiKey)
+            .put("timeout", 25))
+        val array = result.optJSONArray("models") ?: JSONArray()
+        return (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank)
+    }
+
     suspend fun chat(provider: String, model: String, messages: JSONArray, system: String): JSONObject =
         request("POST", "/api/chat", JSONObject()
             .put("provider", provider)

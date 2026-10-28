@@ -18,21 +18,69 @@ for d in (WORKSPACE,KEYS,EVENTS,SESSIONS,ROOT/"agents",ROOT/"skills",ROOT/"tools
 
 def now(): return datetime.now(timezone.utc).isoformat()
 PROVIDERS = {
-    "gemini": {"name":"Google Gemini","key":"gemini_api_key","base_url":"https://generativelanguage.googleapis.com/v1beta","default_model":"gemini-3.8-flash","kind":"gemini","models":["gemini-3.8-flash","gemini-3.7-flash","gemini-3.1-pro-preview"]},
-    "openai": {"name":"OpenAI","key":"openai_api_key","base_url":"https://api.openai.com/v1","default_model":"gpt-6-luna","kind":"openai","models":["gpt-6-luna","gpt-6.1-terra"]},
-    "deepseek": {"name":"DeepSeek","key":"deepseek_api_key","base_url":"https://api.deepseek.com","default_model":"deepseek-flash","kind":"openai","models":["deepseek-flash","deepseek-v4-pro"]},
-    "anthropic": {"name":"Anthropic Claude","key":"anthropic_api_key","base_url":"https://api.anthropic.com/v1","default_model":"claude-haiku-4-5-20251001","kind":"anthropic","models":["claude-haiku-4-5-20251001","claude-sonnet-4-6","claude-opus-4-8"]},
-    "openrouter": {"name":"OpenRouter","key":"openrouter_api_key","base_url":"https://openrouter.ai/api/v1","default_model":"openai/gpt-6-luna","kind":"openai","models":["openai/gpt-6-luna","deepseek/deepseek-flash"]},
-    "mistral": {"name":"Mistral","key":"mistral_api_key","base_url":"https://api.mistral.ai/v1","default_model":"mistral-small-latest","kind":"openai","models":["mistral-small-latest"]},
-    "xai": {"name":"xAI Grok","key":"xai_api_key","base_url":"https://api.x.ai/v1","default_model":"grok-2-latest","kind":"openai","models":["grok-2-latest"]},
-    "groq": {"name":"Groq","key":"groq_api_key","base_url":"https://api.groq.com/openai/v1","default_model":"llama-3.3-70b-versatile","kind":"openai","models":["llama-3.3-70b-versatile"]},
+    "gemini": {"name":"Google Gemini","key":"gemini_api_key","base_url":"https://generativelanguage.googleapis.com/v1beta","default_model":"","kind":"gemini","models":[]},
+    "openai": {"name":"OpenAI","key":"openai_api_key","base_url":"https://api.openai.com/v1","default_model":"","kind":"openai","models":[]},
+    "deepseek": {"name":"DeepSeek","key":"deepseek_api_key","base_url":"https://api.deepseek.com","default_model":"","kind":"openai","models":[]},
+    "anthropic": {"name":"Anthropic Claude","key":"anthropic_api_key","base_url":"https://api.anthropic.com/v1","default_model":"","kind":"anthropic","models":[]},
+    "openrouter": {"name":"OpenRouter","key":"openrouter_api_key","base_url":"https://openrouter.ai/api/v1","default_model":"","kind":"openai","models":[]},
+    "mistral": {"name":"Mistral","key":"mistral_api_key","base_url":"https://api.mistral.ai/v1","default_model":"","kind":"openai","models":[]},
+    "xai": {"name":"xAI Grok","key":"xai_api_key","base_url":"https://api.x.ai/v1","default_model":"","kind":"openai","models":[]},
+    "groq": {"name":"Groq","key":"groq_api_key","base_url":"https://api.groq.com/openai/v1","default_model":"","kind":"openai","models":[]},
 }
 
 def provider_catalog():
-    result=[]
-    for pid, item in PROVIDERS.items():
-        result.append({"id":pid,"name":item["name"],"base_url":item["base_url"],"default_model":item["default_model"],"models":item["models"],"configured":(KEYS/(item["key"]+".json")).is_file(),"credential_name":item["key"]})
-    return result
+    return [
+        {"id":pid,"name":item["name"],"base_url":item["base_url"],
+         "default_model":item["default_model"],"models":[],
+         "configured":(KEYS/(item["key"]+".json")).is_file(),
+         "credential_name":item["key"]}
+        for pid,item in PROVIDERS.items()
+    ]
+
+def discover_provider_models(pid, api_key):
+    provider=PROVIDERS.get(str(pid).strip().lower())
+    key=str(api_key or "").strip()
+    if not provider: return 400,{"ok":False,"error":"Unsupported provider"}
+    if not key: return 400,{"ok":False,"error":"API key is required"}
+    try:
+        if provider["kind"]=="gemini":
+            url=provider["base_url"]+"/models?key="+quote(key,safe="")
+            headers={"Accept":"application/json"}
+        elif provider["kind"]=="anthropic":
+            url=provider["base_url"]+"/models?limit=1000"
+            headers={"x-api-key":key,"anthropic-version":"2023-06-01","Accept":"application/json"}
+        else:
+            url=provider["base_url"].rstrip("/")+"/models"
+            headers={"Authorization":"Bearer "+key,"Accept":"application/json"}
+        req=Request(url,headers=headers,method="GET")
+        with urlopen(req,timeout=25) as response:
+            raw=json.loads(response.read(4_000_000).decode())
+        entries=raw.get("models") if provider["kind"]=="gemini" else raw.get("data",[])
+        models=[]
+        for item in entries or []:
+            if not isinstance(item,dict): continue
+            mid=str(item.get("name" if provider["kind"]=="gemini" else "id","")).strip()
+            if provider["kind"]=="gemini":
+                mid=mid.removeprefix("models/")
+                methods=item.get("supportedGenerationMethods",[])
+                if "generateContent" not in methods: continue
+            if mid and mid not in models: models.append(mid)
+        models.sort()
+        if not models: return 502,{"ok":False,"error":"Provider returned no usable models. Check key permissions and provider API access."}
+        event("provider_models_discovered",{"provider":pid,"count":len(models)})
+        return 200,{"ok":True,"provider":pid,"provider_name":provider["name"],"models":models}
+    except HTTPError as e:
+        event("provider_models_error",{"provider":pid,"status":e.code})
+        detail=""
+        try:
+            payload=json.loads(e.read(8000).decode(errors="replace"))
+            detail=str((payload.get("error") or {}).get("message") or payload.get("message") or "")
+        except Exception: pass
+        return 502,{"ok":False,"error":"Provider model lookup failed (HTTP "+str(e.code)+")","detail":detail[:500]}
+    except (URLError,TimeoutError):
+        return 502,{"ok":False,"error":"Provider connection failed while listing models"}
+    except Exception as e:
+        return 502,{"ok":False,"error":"Provider model lookup failed","error_type":type(e).__name__}
 
 def provider_chat(data):
     pid=str(data.get("provider","")).strip().lower()
@@ -168,6 +216,9 @@ class Handler(BaseHTTPRequestHandler):
         p=urlparse(self.path).path
         try: data=self.body()
         except Exception as e: return self.sendj(400,{"ok":False,"error":"Invalid JSON","detail":str(e)})
+        if p=="/api/providers/models":
+            status,result=discover_provider_models(data.get("provider"),data.get("api_key"))
+            return self.sendj(status,result)
         if p=="/api/chat":
             status,result=provider_chat(data)
             return self.sendj(status,result)
