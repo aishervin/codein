@@ -89,6 +89,12 @@ echo "[Codein] Starting the local bridge with automatic restart..."
 if command -v termux-wake-lock >/dev/null 2>&1; then
   termux-wake-lock >/dev/null 2>&1 || true
 fi
+if [ -f "$ROOT/server-child.pid" ]; then
+  OLD_CHILD_PID="$(cat "$ROOT/server-child.pid" 2>/dev/null || true)"
+  if [ -n "$OLD_CHILD_PID" ] && kill -0 "$OLD_CHILD_PID" 2>/dev/null; then
+    kill "$OLD_CHILD_PID" 2>/dev/null || true
+  fi
+fi
 if [ -f "$ROOT/server.pid" ]; then
   OLD_PID="$(cat "$ROOT/server.pid" 2>/dev/null || true)"
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
@@ -97,8 +103,12 @@ if [ -f "$ROOT/server.pid" ]; then
   fi
 fi
 nohup bash -c 'while true; do
-  python "$HOME/.codein/server.py"
+  python "$HOME/.codein/server.py" &
+  CHILD_PID=$!
+  echo "$CHILD_PID" > "$HOME/.codein/server-child.pid"
+  wait "$CHILD_PID"
   RC=$?
+  rm -f "$HOME/.codein/server-child.pid"
   echo "[Codein] Bridge exited with code $RC; restarting in 2 seconds."
   sleep 2
 done' >> "$ROOT/logs/server.log" 2>&1 &
