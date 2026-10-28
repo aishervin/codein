@@ -35,6 +35,19 @@ p.write_text(json.dumps({"port":8765,"token":secrets.token_urlsafe(32),"workspac
 p.chmod(0o600)
 PY
 fi
+# Rotate the local bridge token on every explicit bootstrap run. This also
+# invalidates any token that was accidentally exposed in terminal output.
+python - "$ROOT/config.json" <<'PY'
+import json, secrets, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+config = json.loads(p.read_text())
+config.setdefault("port", 8765)
+config.setdefault("workspace", str(Path.home()/".codein"/"workspace"))
+config["token"] = secrets.token_urlsafe(32)
+p.write_text(json.dumps(config, indent=2)+"\n")
+p.chmod(0o600)
+PY
 cat > "$ROOT/ROOM.md" <<'ROOM'
 # Codein Agent Room
 Shared local context for every model and agent connected to Codein.
