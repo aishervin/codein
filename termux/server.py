@@ -92,7 +92,8 @@ def mcp_tools_catalog():
         {"name":"event_record","description":"Append a brief non-secret activity event to the local Agent Room journal.","inputSchema":{"type":"object","properties":{"kind":{"type":"string"},"summary":{"type":"string"}},"required":["kind","summary"]}},
         {"name":"state_update","description":"Update shared Agent Room task state using a partial JSON object.","inputSchema":{"type":"object","properties":{"fields":{"type":"object"}},"required":["fields"]}},
         {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}},
-        {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}}
+        {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
+        {"name":"opencode_manage","description":"Manage OpenCode agent engine: install, run, or check status.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","status","stop"]},"args":{"type":"string"}},"required":["action"]}}
     ]
 
 def dispatch_mcp_tool(name, args):
@@ -155,6 +156,23 @@ def dispatch_mcp_tool(name, args):
     if name=="provider_chat":
         status,result=provider_chat(args)
         return result
+    if name=="opencode_manage":
+        action=str(args.get("action","status"))
+        if action=="install":
+            run=subprocess.run(["/data/data/com.termux/files/usr/bin/npm","install","-g","opencode-ai"],capture_output=True,text=True)
+            return {"ok":run.returncode==0,"status":"Installation finished","stdout":run.stdout,"stderr":run.stderr}
+        if action=="run":
+            # Start OpenCode server in background
+            proc=subprocess.Popen(["opencode","serve","--port","8766"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+            return {"ok":True,"status":"OpenCode server started (PID "+str(proc.pid)+")"}
+        if action=="status":
+            # Check if opencode process is running
+            run=subprocess.run(["pgrep","-f","opencode"],capture_output=True,text=True)
+            return {"ok":True,"status":"Running" if run.returncode==0 else "Stopped"}
+        if action=="stop":
+            subprocess.run(["pkill","-f","opencode"])
+            return {"ok":True,"status":"OpenCode server stopped"}
+        return {"ok":False,"error":"Invalid action"}
     raise ValueError("Unknown MCP tool: "+str(name))
 
 def provider_chat(data):

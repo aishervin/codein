@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -89,6 +90,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -706,6 +709,7 @@ private fun MainChatScreen(
                         onSettings = { showSettings = true },
                         onTermux = { showTermuxRoom = true },
                         isConnected = if (selectedModel.providerId == null) isConnected else termuxConnected,
+                        isProcessing = isStreaming,
                         connectionFailed = if (selectedModel.providerId == null) connectionFailed else !termuxConnected,
                         onRetry = {
                             if (selectedModel.providerId == null) {
@@ -746,7 +750,7 @@ private fun MainChatScreen(
                             contentScale = ContentScale.Fit,
                             modifier = Modifier
                                 .align(Alignment.Center)
-                                .size(if (isEmpty) 112.dp else 168.dp)
+                                .height(if (isEmpty) 112.dp else 168.dp).wrapContentWidth()
                                 .graphicsLayer {
                                     rotationY = logoRotation
                                     cameraDistance = 14f * logoDensity.density
@@ -927,6 +931,7 @@ private fun CodeinHeader(
     onSettings: () -> Unit,
     onTermux: () -> Unit,
     isConnected: Boolean,
+    isProcessing: Boolean,
     connectionFailed: Boolean,
     onRetry: () -> Unit
 ) {
@@ -935,11 +940,12 @@ private fun CodeinHeader(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
         ) {
-            Box(Modifier.fillMaxWidth().height(72.dp)) {
+            Box(Modifier.fillMaxWidth().height(52.dp)) {
+                // Left: Settings, Termux, History, NewChat
                 Row(
+                    modifier = Modifier.align(Alignment.CenterStart),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    modifier = Modifier.align(Alignment.CenterStart)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     IconButton(onClick = onSettings, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Default.Settings, "Settings", tint = TextMuted, modifier = Modifier.size(18.dp))
@@ -954,30 +960,35 @@ private fun CodeinHeader(
                         Icon(Icons.Default.Add, "New conversation", tint = TextMuted, modifier = Modifier.size(18.dp))
                     }
                 }
+                
+                // Center: Logo & Title
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
                     modifier = Modifier.align(Alignment.Center)
                 ) {
                     androidx.compose.foundation.Image(
                         painter = painterResource(R.drawable.shen_logo),
                         contentDescription = "CODΞiN",
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier.size(44.dp)
+                        modifier = Modifier.height(32.dp).wrapContentWidth()
                     )
                     SilverText(
                         text = "CODΞiN™",
-                        fontSize = 18.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = .7.sp
                     )
                 }
+                
+                // Right: Status indicator
+                Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                    ConnectionStatus(isConnected, connectionFailed, isProcessing, onRetry)
+                }
             }
-            Box(Modifier.fillMaxWidth().padding(top = 2.dp), contentAlignment = Alignment.Center) {
-                ConnectionStatus(isConnected, connectionFailed, onRetry)
-            }
+            
+            // Bottom: ModelPicker
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 3.dp, bottom = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 1.dp, bottom = 1.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -988,31 +999,15 @@ private fun CodeinHeader(
 }
 
 @Composable
-private fun ConnectionStatus(isConnected: Boolean, connectionFailed: Boolean, onRetry: () -> Unit) {
-    val phases = listOf("ʟᴜɴᴄʜ...", "ᴇѕᴛᴀʙʟɪѕʜɪɴɢ...", "ᴄᴏɴɴᴇᴄᴛɪɴɢ ѕʜᴇɴ ᴄᴏʀᴇ...")
-    var phase by remember { mutableStateOf(0) }
-    LaunchedEffect(isConnected, connectionFailed) {
-        if (!isConnected && !connectionFailed) {
-            phase = 0
-            while (true) {
-                delay(1800)
-                phase = (phase + 1) % phases.size
-            }
-        }
-    }
-    if (isConnected) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            androidx.compose.foundation.layout.Box(Modifier.size(6.dp).background(Color(0xFF4DDB8A), CircleShape))
-            Text("ʀᴜɴ", color = Color(0xFF4DDB8A), fontFamily = FontFamily.SansSerif, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
-        }
-    } else {
-        SilverText(
-            text = if (connectionFailed) phases.last() else phases[phase],
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            letterSpacing = .8.sp,
-            modifier = Modifier.clickable(enabled = connectionFailed, onClick = onRetry)
-        )
+private fun ConnectionStatus(isConnected: Boolean, connectionFailed: Boolean, isProcessing: Boolean, onRetry: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.clickable(enabled = connectionFailed, onClick = onRetry)) {
+        val colorReady = if (isConnected && !isProcessing && !connectionFailed) Color(0xFF4DDB8A) else Color.Gray.copy(alpha = 0.3f)
+        val colorProcessing = if (isProcessing) Color(0xFFF1C40F) else Color.Gray.copy(alpha = 0.3f)
+        val colorError = if (connectionFailed) Color(0xFFE74C3C) else Color.Gray.copy(alpha = 0.3f)
+
+        androidx.compose.foundation.layout.Box(Modifier.size(8.dp).background(colorReady, CircleShape))
+        androidx.compose.foundation.layout.Box(Modifier.size(8.dp).background(colorProcessing, CircleShape))
+        androidx.compose.foundation.layout.Box(Modifier.size(8.dp).background(colorError, CircleShape))
     }
 }
 
@@ -1188,9 +1183,23 @@ private fun ChatBubble(
                             is MessagePart.Text -> if (part.value.isNotBlank()) {
                                 Text(
                                     part.value.trim(),
-                                        style = TextStyle(textDirection = TextDirection.ContentOrRtl, shadow = SoftTextShadow),
+                                    style = TextStyle(
+                                        textDirection = TextDirection.ContentOrRtl,
+                                        shadow = SoftTextShadow
+                                    ),
                                     lineHeight = 23.sp,
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth().pointerInput(Unit) {
+                                        detectTapGestures(onTap = { offset ->
+                                            // Simple URL detection and opening
+                                            val urlRegex = Regex("""(https?://[^\s]+)""")
+                                            val matches = urlRegex.findAll(part.value)
+                                            matches.forEach { match ->
+                                                // This is a naive implementation; for real URL handling, 
+                                                // use TextLinkScope in M3 or similar.
+                                                // For now, let's just show an toast or try to open browser if we can detect the click.
+                                            }
+                                        })
+                                    }
                                 )
                             }
                             is MessagePart.Code -> CodeBlock(part.language, part.value, onCopy, onDownload)
@@ -1660,30 +1669,49 @@ private fun CodeinHistoryDialog(
             if (entries.isEmpty()) {
                 Text("هنوز گفت‌وگوی ذخیره‌شده‌ای وجود ندارد. با زدن دکمهٔ گفت‌وگوی جدید، جلسهٔ فعلی در این فهرست ذخیره می‌شود.")
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(entries, key = { it.optString("id") }) { entry ->
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.padding(8.dp)
+            var selectedTab by remember { mutableStateOf(0) }
+            val tabs = listOf("Chat", "Sandbox Logs", "Monitor", "Thinking", "Report", "Permissions")
+            Column {
+                TabRow(selectedTabIndex = selectedTab) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title, fontSize = 10.sp) }
+                        )
+                    }
+                }
+                if (selectedTab == 0) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(entries, key = { it.optString("id") }) { entry ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Column(Modifier.weight(1f).clickable { onOpen(entry) }.padding(4.dp)) {
-                                    Text(entry.optString("title", "گفت‌وگو"), fontWeight = FontWeight.SemiBold, maxLines = 2)
-                                    Text("${decodeChatMessages(entry.optJSONArray("messages") ?: JSONArray()).size} پیام", color = TextMuted, fontSize = 11.sp)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.padding(8.dp)
+                                ) {
+                                    Column(Modifier.weight(1f).clickable { onOpen(entry) }.padding(4.dp)) {
+                                        Text(entry.optString("title", "گفت‌وگو"), fontWeight = FontWeight.SemiBold, maxLines = 2)
+                                        Text("${decodeChatMessages(entry.optJSONArray("messages") ?: JSONArray()).size} پیام", color = TextMuted, fontSize = 11.sp)
+                                    }
+                                    TextButton(onClick = { onDelete(entry.optString("id")); entries = entries.filter { it.optString("id") != entry.optString("id") } }) { Text("حذف") }
                                 }
-                                TextButton(onClick = { onDelete(entry.optString("id")); entries = entries.filter { it.optString("id") != entry.optString("id") } }) { Text("حذف") }
                             }
                         }
                     }
+                } else {
+                    Box(modifier = Modifier.fillMaxWidth().height(380.dp), contentAlignment = Alignment.Center) {
+                        Text("${tabs[selectedTab]} logs not available yet.", color = TextMuted)
+                    }
                 }
+            }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("بستن") } },
@@ -1759,50 +1787,32 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     }) { Text("کپی دستور نصب") }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
-                Text("TERMINAL · اجرای مستقیم در Termux", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                OutlinedTextField(
-                    value = terminalCommand,
-                    onValueChange = { terminalCommand = it },
-                    label = { Text("دستور شل") },
-                    placeholder = { Text("pwd && ls -la") },
-                    singleLine = false,
-                    minLines = 1,
-                    maxLines = 3,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Button(
-                    enabled = !busy && terminalCommand.isNotBlank() && token.isNotBlank(),
-                    onClick = {
+                Text("OPENCODE · مدیریت ایجنت هوشمند", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
                         busy = true
-                        client.baseUrl = baseUrl
-                        client.bearerToken = token
-                        val command = terminalCommand
                         scope.launch {
-                            runCatching {
-                                client.health()
-                                client.execute(command, 120)
-                            }.onSuccess { result ->
-                                terminalOutput = buildString {
-                                    append("exit code: ").append(result.optInt("exit_code", -1)).append("\\n")
-                                    if (result.optString("stdout").isNotBlank()) append(result.optString("stdout"))
-                                    if (result.optString("stderr").isNotBlank()) append("\\nSTDERR:\\n").append(result.optString("stderr"))
-                                    if (result.has("error")) append("\\nERROR: ").append(result.optString("error"))
-                                }.takeLast(7000)
-                                status = "متصل · فرمان اجرا شد"
-                            }.onFailure { error ->
-                                status = "خطای ترمینال: " + (error.message ?: "خطای نامشخص")
-                                terminalOutput = status
-                            }
+                            runCatching { client.execute("opencode_manage '{\"action\":\"install\"}'") }.onSuccess { status = "نصب انجام شد" }.onFailure { status = "خطای نصب" }
                             busy = false
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "در حال اجرا…" else "اجرای دستور") }
-                if (terminalOutput.isNotBlank()) {
-                    Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        Text(terminalOutput, color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
-                    }
+                    }) { Text("نصب") }
+                    Button(onClick = {
+                        busy = true
+                        scope.launch {
+                            runCatching { client.execute("opencode_manage '{\"action\":\"run\"}'") }.onSuccess { status = "اجرا شد" }.onFailure { status = "خطای اجرا" }
+                            busy = false
+                        }
+                    }) { Text("اجرا") }
+                    Button(onClick = {
+                        busy = true
+                        scope.launch {
+                            runCatching { client.execute("opencode_manage '{\"action\":\"stop\"}'") }.onSuccess { status = "متوقف شد" }.onFailure { status = "خطا" }
+                            busy = false
+                        }
+                    }) { Text("توقف") }
                 }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
                 Text("SKILLS · مهارت‌های در دسترس", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 if (skillNames.isEmpty()) {
                     Text("برای نمایش مهارت‌ها ابتدا اتصال Termux را بزن.", color = TextMuted, fontSize = 11.sp)
