@@ -200,6 +200,47 @@ private val codeinModels = listOf(
     CodeinModel("hero", "HERO")
 )
 
+private fun compactAgentRoomContext(raw: String): String {
+    val room = runCatching { JSONObject(raw) }.getOrNull() ?: return raw.take(12000)
+    val compact = JSONObject()
+    listOf("root", "workspace", "room", "state", "credentials").forEach { key ->
+        if (room.has(key)) compact.put(key, room.opt(key))
+    }
+    val events = room.optJSONArray("events") ?: JSONArray()
+    val recentEvents = JSONArray()
+    for (i in maxOf(0, events.length() - 8) until events.length()) {
+        val event = events.optJSONObject(i) ?: continue
+        recentEvents.put(JSONObject()
+            .put("at", event.optString("at"))
+            .put("kind", event.optString("kind"))
+            .put("data", event.optJSONObject("data") ?: JSONObject()))
+    }
+    if (recentEvents.length() > 0) compact.put("recent_events", recentEvents)
+    val sessions = room.optJSONArray("sessions") ?: JSONArray()
+    val recentSessions = JSONArray()
+    for (i in 0 until minOf(3, sessions.length())) {
+        val session = sessions.optJSONObject(i) ?: continue
+        recentSessions.put(JSONObject()
+            .put("title", session.optString("title"))
+            .put("summary", session.optString("summary").take(900))
+            .put("next_action", session.optString("next_action")))
+    }
+    if (recentSessions.length() > 0) compact.put("sessions", recentSessions)
+    val skills = room.optJSONObject("skills")
+    if (skills != null) {
+        val selectedSkills = JSONObject()
+        val iterator = skills.keys()
+        var count = 0
+        while (iterator.hasNext() && count < 5) {
+            val key = iterator.next()
+            selectedSkills.put(key, skills.optString(key).take(1400))
+            count++
+        }
+        compact.put("skills", selectedSkills)
+    }
+    return compact.toString().take(16000)
+}
+
 private const val MAX_ATTACHMENT_BYTES = 1024 * 1024
 
 private val SHEN_SYSTEM_PROMPT = """
@@ -353,7 +394,7 @@ private fun MainChatScreen(
         attachmentName: String?,
         history: List<ChatMessage>
     ) {
-        if (isStreaming || (!isConnected && sharedRoomContext.isBlank())) return
+        if (isStreaming || (selectedModel.providerId == null && !isConnected) || (selectedModel.providerId != null && sharedRoomContext.isBlank())) return
         val requestMessages = JSONArray()
         history.forEach { message ->
             requestMessages.put(
@@ -369,7 +410,7 @@ private fun MainChatScreen(
         suppressDirectiveOutput = false
         isStreaming = true
         val target = webView
-        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM JSON: " + sharedRoomContext + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
+        val effectiveSystemPrompt = SHEN_SYSTEM_PROMPT + if (sharedRoomContext.isBlank()) "" else " SHARED LOCAL AGENT ROOM (compact JSON): " + compactAgentRoomContext(sharedRoomContext) + " If a local Termux operation is needed, emit exactly [[CODEIN_TERMUX_EXEC]] followed by the raw shell command and then [[/CODEIN_TERMUX_EXEC]]. Do not wrap the directive in markdown. The app executes it in the Termux workspace and sends the result back. Use existing named credentials from ~/.codein/keys without printing their values. Never include secrets in commands, output, logs, or chat. If a required key name is absent from the shared credential index, ask the user to provide it. When the user clearly supplies the requested credential in chat, emit only [[CODEIN_SAVE_KEY credential_name]]exact_value[[/CODEIN_SAVE_KEY]]; the app stores it locally and resumes. Never echo the secret in ordinary text."
         val selectedProviderId = selectedModel.providerId
         val selectedModelId = selectedModel.id
         val selectedModelLabel = selectedModel.suffix
@@ -419,7 +460,7 @@ private fun MainChatScreen(
     fun sendMessage() {
         val text = input.trim()
         val selectedAttachment = attachment
-        if ((text.isEmpty() && selectedAttachment == null) || isStreaming || (!isConnected && sharedRoomContext.isBlank())) return
+        if ((text.isEmpty() && selectedAttachment == null) || isStreaming || (selectedModel.providerId == null && !isConnected) || (selectedModel.providerId != null && sharedRoomContext.isBlank())) return
         if (pendingCredentialName.isNotBlank() && selectedAttachment == null) {
             val name = pendingCredentialName
             pendingCredentialName = ""
@@ -446,7 +487,7 @@ private fun MainChatScreen(
     }
 
     fun retryMessage(message: ChatMessage) {
-        if (isStreaming || !isConnected) return
+        if (isStreaming || (selectedModel.providerId == null && !isConnected) || (selectedModel.providerId != null && sharedRoomContext.isBlank())) return
         val index = messages.indexOf(message)
         if (index < 0) return
         val history = messages.take(index)
