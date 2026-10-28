@@ -739,33 +739,6 @@ private fun MainChatScreen(
         }
     }
     bridge.onError = {
-                messages.add(ChatMessage(user = false, text = response))
-                if (sharedRoomContext.isNotBlank()) {
-                    val taskTitle = messages.lastOrNull { it.user && it.text != "Termux tool result" }?.text?.take(120) ?: "Codein session"
-                    agentScope.launch {
-                        runCatching {
-                            termuxClient.saveSession(
-                                "session-" + System.currentTimeMillis(),
-                                taskTitle,
-                                response.takeLast(6000),
-                                "Resume from the latest saved Agent Room context"
-                            )
-                            termuxClient.updateState(
-                                JSONObject()
-                                    .put("last_task", taskTitle)
-                                    .put("recent_changes", JSONArray().put("Assistant completed: " + taskTitle))
-                            )
-                            termuxClient.recordEvent("assistant_turn_completed", taskTitle)
-                            termuxClient.roomContext()
-                        }.getOrNull()?.let { sharedRoomContext = it.toString() }
-                    }
-                }
-            }
-            activeAnswer = ""
-            isStreaming = false
-        }
-    }
-    bridge.onError = {
         if (activeAnswer.isNotBlank()) messages.add(ChatMessage(user = false, text = activeAnswer))
         activeAnswer = ""
         isStreaming = false
