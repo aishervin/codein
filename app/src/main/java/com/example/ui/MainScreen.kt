@@ -332,13 +332,9 @@ private fun MainChatScreen(
             termuxConnected = false
         } else {
             while (true) {
-                val health = runCatching { termuxClient.health() }
-                termuxConnected = health.isSuccess
-                if (health.isSuccess) {
-                    runCatching { termuxClient.roomContext() }.getOrNull()?.let {
-                        sharedRoomContext = it.toString()
-                    }
-                }
+                // Keep-alive uses MCP ping only; don't repeatedly reload Agent Room or
+                // re-run initialization/model discovery during ordinary idle time.
+                termuxConnected = runCatching { termuxClient.ping() }.isSuccess
                 delay(12000)
             }
         }
