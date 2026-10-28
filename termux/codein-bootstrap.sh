@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
-BRANCH="main"
+BRANCH="${CODEIN_BRANCH:-main}"
 RAW="https://raw.githubusercontent.com/aishervin/codein/$BRANCH"
 ROOT="$HOME/.codein"
 command -v pkg >/dev/null 2>&1 || { echo "Run this inside Termux." >&2; exit 1; }
@@ -15,7 +15,8 @@ fetch() {
 }
 fetch "termux/server.py" "$ROOT/server.py"
 fetch "termux/with-key.py" "$ROOT/bin/codein-with-key"
-chmod 700 "$ROOT/server.py" "$ROOT/bin/codein-with-key"
+fetch "termux/codein-opencode" "$ROOT/bin/codein-opencode"
+chmod 700 "$ROOT/server.py" "$ROOT/bin/codein-with-key" "$ROOT/bin/codein-opencode"
 fetch "termux/skills/integrations.md" "$ROOT/skills/integrations.md"
 fetch "termux/skills/github-cloudflare.md" "$ROOT/skills/github-cloudflare.md"
 fetch "termux/skills/telegram.md" "$ROOT/skills/telegram.md"
@@ -129,6 +130,14 @@ echo
 echo "[Codein] Workspace and documentation skills ready: $ROOT"
 echo "[Codein] Bridge startup is automatic; log: $ROOT/logs/server.log"
 echo "[Codein] Keep Termux open while Codein uses it."
+echo
+echo "[Codein] Preparing OpenCode agent API (no browser UI)..."
+if "$ROOT/bin/codein-opencode" start; then
+  echo "[Codein] OpenCode runtime ready on http://127.0.0.1:4097"
+else
+  echo "[Codein] OpenCode runtime could not start. The existing Codein bridge remains available."
+  echo "[Codein] Check: $ROOT/logs/opencode.log"
+fi
 
 echo
 echo "============================================================"
