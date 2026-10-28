@@ -6,7 +6,7 @@ on:
       release_tag:
         description: "Release tag, for example v1.0.0"
         required: true
-        default: "v1.0.6"
+        default: "v1.0.9"
         type: string
       version_name:
         description: "Android versionName; leave empty to derive it from the tag"
@@ -16,7 +16,7 @@ on:
       version_code:
         description: "Integer versionCode; must increase for every update"
         required: true
-        default: "14"
+        default: "19"
         type: string
       prerelease:
         description: "Mark the GitHub Release as a pre-release"
@@ -83,10 +83,10 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${INPUT_TAG:-${GITHUB_REF_NAME}}"
-          if [[ "$TAG" == "main" ]]; then TAG="v1.0.6"; fi
+          if [[ "$TAG" == "main" ]]; then TAG="v1.0.9"; fi
           [[ "$TAG" == v* ]] || { echo "Tag must start with v: $TAG"; exit 1; }
           VERSION_NAME="${INPUT_VERSION_NAME:-${TAG#v}}"
-          VERSION_CODE="${INPUT_VERSION_CODE:-14}"
+          VERSION_CODE="${INPUT_VERSION_CODE:-19}"
           [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo "version_code must be an integer"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
