@@ -62,6 +62,13 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          # The checked-in wrapper JAR fails Gradle's published checksum validation.
+          # Recreate it from the runner's trusted Gradle binary before running the wrapper.
+          validate-wrappers: false
+
+      - name: Regenerate trusted Gradle wrapper
+        run: gradle wrapper --gradle-version 9.3.1 --distribution-type bin
 
       - name: Prepare release values
         id: release
