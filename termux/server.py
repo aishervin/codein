@@ -260,7 +260,7 @@ def provider_chat(data):
     timeout=max(10,min(int(data.get("timeout",120)),180))
     # Provider-native model calls receive only local action tools. Avoid recursion
     # and don't ask the model to invent API keys for provider discovery.
-    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save")]
+    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve")]
     try:
         if provider["kind"]=="gemini":
             contents=[]
