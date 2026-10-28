@@ -121,7 +121,7 @@ def dispatch_mcp_tool(name, args):
         value=str(args.get("consumer_api_key","")).strip()
         if not value.startswith("ck_") or len(value)<12: raise ValueError("A valid Composio Connect consumer key (ck_...) is required.")
         secret_file=KEYS/"composio_consumer_api_key.json"
-        secret_file.write_text(json.dumps({"name":"composio_consumer_api_key","value":value,"updated_at":now()},ensure_ascii=False)+"\\n",encoding="utf-8")
+        secret_file.write_text(json.dumps({"name":"composio_consumer_api_key","value":value,"updated_at":now()},ensure_ascii=False),encoding="utf-8")
         secret_file.chmod(0o600)
         event("composio_configured",{"configured":True})
         return {"ok":True,"message":"Composio key saved locally. Call composio_tools_refresh to discover service tools."}
