@@ -301,6 +301,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.auth(): return self.sendj(401,{"ok":False,"error":"Authorization required"})
         p=urlparse(self.path).path
+        if p=="/mcp":
+            self.send_response(405); self.send_header("Allow","POST"); self.send_header("Content-Length","0"); self.end_headers()
+            return
         if p=="/health": return self.sendj(200,{"ok":True,"service":"codein-termux","time":now(),"workspace":str(WORKSPACE)})
         if p=="/api/workspace": return self.sendj(200,{"ok":True,"root":str(ROOT),"workspace":str(WORKSPACE),"state":readj(ROOT/"state.json",{})})
         if p=="/api/room":
