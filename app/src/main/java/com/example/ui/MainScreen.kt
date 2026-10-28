@@ -513,8 +513,8 @@ private fun MainChatScreen(
                             return@onSuccess
                         }
                         val answer = result.optString("content")
-                        val reasoningMatch = Regex("""<(?:think|analysis|reasoning)>\\s*([\\s\\S]*?)\\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).find(answer)
-                        val visibleAnswer = Regex("""<(?:think|analysis|reasoning)>\\s*[\\s\\S]*?\\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).replace(answer, "").trim()
+                        val reasoningMatch = Regex("""<(?:think|analysis|reasoning)>\s*([\s\S]*?)\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).find(answer)
+                        val visibleAnswer = Regex("""<(?:think|analysis|reasoning)>\s*[\s\S]*?\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).replace(answer, "").trim()
                         messages.add(ChatMessage(
                             user = false,
                             text = visibleAnswer.ifBlank { "سرویس پاسخ متنی برنگرداند." },
@@ -613,10 +613,10 @@ private fun MainChatScreen(
                     val combined = buildString {
                         if (stdout.isNotBlank()) append(stdout)
                         if (stderr.isNotBlank()) {
-                            if (isNotEmpty()) append("\\n")
-                            append("STDERR:\\n").append(stderr)
+                            if (isNotEmpty()) append("\n")
+                            append("STDERR:\n").append(stderr)
                         }
-                        if (result.has("error")) append("\\nERROR: ").append(result.optString("error"))
+                        if (result.has("error")) append("\nERROR: ").append(result.optString("error"))
                     }.ifBlank { "(بدون خروجی)" }
                     messages.add(ChatMessage(
                         user = false,
@@ -627,7 +627,7 @@ private fun MainChatScreen(
                         exitCode = exitCode
                     ))
                     runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
-                    val toolResult = "Termux execution result (exit code $exitCode):\\n$combined\\nContinue the original task using this result. Do not repeat successful work."
+                    val toolResult = "Termux execution result (exit code $exitCode):\n$combined\nContinue the original task using this result. Do not repeat successful work."
                     isStreaming = false
                     sendRequest("Termux tool result", toolResult, null, messages.toList())
                 }
@@ -1346,7 +1346,7 @@ private fun ChatBubble(
                                     val value = part.value.trim()
                                     append(value)
                                     // Keep the original message intact while annotating each URL.
-                                    Regex("""https?://[^\\s<>]+""").findAll(value).forEach { match ->
+                                    Regex("""https?://[^\s<>]+""").findAll(value).forEach { match ->
                                         val cleanUrl = match.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}')
                                         if (cleanUrl.isNotBlank()) {
                                             addStringAnnotation(
@@ -1960,8 +1960,8 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                                     skillNames = it.second.optJSONObject("skills")?.keys()?.asSequence()?.toList().orEmpty().sorted()
                                     onRoomContextLoaded(it.second)
                                     output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
-                                        "\\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" }) +
-                                        "\\nSkills: " + skillNames.joinToString().ifBlank { "none installed" }
+                                        "\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" }) +
+                                        "\nSkills: " + skillNames.joinToString().ifBlank { "none installed" }
                                 }
                                 .onFailure { status = "اتصال ناموفق: " + (it.message ?: "خطای نامشخص") }
                             busy = false
