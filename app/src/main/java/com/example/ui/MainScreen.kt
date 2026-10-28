@@ -1204,10 +1204,10 @@ private fun ChatBubble(
                                     text = linkedText,
                                     style = TextStyle(
                                         textDirection = TextDirection.ContentOrRtl,
+                                        lineHeight = 23.sp,
                                         shadow = SoftTextShadow,
                                         color = MaterialTheme.colorScheme.onSurface
                                     ),
-                                    lineHeight = 23.sp,
                                     modifier = Modifier.fillMaxWidth(),
                                     onClick = { offset: Int ->
                                         linkedText.getStringAnnotations("URL", offset, offset)
