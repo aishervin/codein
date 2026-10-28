@@ -460,7 +460,8 @@ private fun MainChatScreen(
                         }
                     }
                     .onFailure { error ->
-                        if (error is java.io.IOException) termuxConnected = false
+                        // Provider API errors/timeouts do not prove the local MCP bridge is down.
+                        // The independent MCP health probe owns connection state.
                         if (error is com.example.termux.MissingProviderCredential) {
                             pendingCredentialName = error.credentialName
                             messages.add(ChatMessage(user = false, text = "برای استفاده از ${error.providerName} کلید API لازم است. کلید را همین‌جا در چت بفرست؛ برنامه آن را محلی در Termux ذخیره می‌کند و مقدارش را در تاریخچه نشان نمی‌دهد. فقط مقدار کلید را در پیام بعدی بفرست."))
