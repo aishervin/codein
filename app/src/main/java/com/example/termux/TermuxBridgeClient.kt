@@ -36,11 +36,18 @@ class TermuxBridgeClient(context: Context) {
             .put("clientInfo", JSONObject().put("name", "Codein Android").put("version", "1.0.5")))
         mcpNotification("notifications/initialized")
         val tools = mcpRequest("tools/list", JSONObject())
+        val toolArray = tools.optJSONArray("tools") ?: JSONArray()
+        val toolNames = (0 until toolArray.length()).mapNotNull { toolArray.optJSONObject(it)?.optString("name") }.toSet()
+        val requiredTools = setOf("termux_exec", "agent_room_get", "provider_models_list", "provider_chat")
+        val missing = requiredTools - toolNames
+        check(missing.isEmpty()) {
+            "The Termux MCP server is outdated (missing " + missing.joinToString() + "). Re-run the Codein Termux installer."
+        }
         return JSONObject()
             .put("ok", true)
             .put("service", init.optJSONObject("serverInfo")?.optString("name", "MCP Termux") ?: "MCP Termux")
             .put("protocolVersion", init.optString("protocolVersion"))
-            .put("tools", tools.optJSONArray("tools") ?: JSONArray())
+            .put("tools", toolArray)
     }
 
     suspend fun workspace(): JSONObject = request("GET", "/api/workspace")
