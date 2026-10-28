@@ -14,6 +14,7 @@ fetch() {
   curl --retry 3 --retry-delay 1 --fail --silent --show-error "$RAW/$remote" -o "$target"
 }
 fetch "termux/server.py" "$ROOT/server.py"
+fetch "termux/composio_connect.py" "$ROOT/composio_connect.py"
 fetch "termux/with-key.py" "$ROOT/bin/codein-with-key"
 fetch "termux/codein-opencode" "$ROOT/bin/codein-opencode"
 chmod 700 "$ROOT/server.py" "$ROOT/bin/codein-with-key" "$ROOT/bin/codein-opencode"
