@@ -1707,18 +1707,30 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                 OutlinedTextField(value = keyName, onValueChange = { keyName = it }, label = { Text("نام کلید (قابل ویرایش)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = keyValue, onValueChange = { keyValue = it }, label = { Text("مقدار کلید / توکن سرویس") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Button(
-                    enabled = !busy && status.startsWith("متصل") && keyName.isNotBlank() && keyValue.isNotBlank(),
+                    enabled = !busy && keyName.isNotBlank() && keyValue.isNotBlank() && token.isNotBlank(),
                     onClick = {
                         busy = true
+                        client.baseUrl = baseUrl
+                        client.bearerToken = token
                         scope.launch {
-                            runCatching { client.saveCredential(keyName, keyValue) }
-                                .onSuccess { keyValue = ""; savedKeys = (savedKeys + keyName).distinct(); scope.launch { runCatching { client.roomContext() }.onSuccess { onRoomContextLoaded(it) } }; output = "Saved locally in Termux vault as: " + keyName; status = "متصل · کلید ذخیره شد" }
-                                .onFailure { status = "Save failed: " + (it.message ?: "unknown error") }
+                            runCatching {
+                                client.health()
+                                client.saveCredential(keyName, keyValue)
+                                client.roomContext()
+                            }
+                                .onSuccess { room ->
+                                    keyValue = ""
+                                    savedKeys = (savedKeys + keyName).distinct()
+                                    onRoomContextLoaded(room)
+                                    status = "متصل · کلید ذخیره شد"
+                                    output = "کلید با موفقیت در Termux ذخیره شد."
+                                }
+                                .onFailure { status = "ذخیره ناموفق: " + (it.message ?: "خطای نامشخص") }
                             busy = false
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
-                 ) { Text("ذخیرهٔ امن کلید در Termux") }
+                ) { Text("ذخیرهٔ امن کلید در Termux") }
                 if (output.isNotBlank()) {
                     Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Text(output.takeLast(5000), color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
