@@ -110,6 +110,7 @@ def mcp_tools_catalog():
         {"name":"event_record","description":"Append a brief non-secret activity event to the local Agent Room journal.","inputSchema":{"type":"object","properties":{"kind":{"type":"string"},"summary":{"type":"string"}},"required":["kind","summary"]}},
         {"name":"state_update","description":"Update shared Agent Room task state using a partial JSON object.","inputSchema":{"type":"object","properties":{"fields":{"type":"object"}},"required":["fields"]}},
         {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}},
+        {"name":"provider_models_saved_list","description":"Query a provider model catalog using the API key already saved in the local credential vault.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)}},"required":["provider"]}},
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
         {"name":"opencode_manage","description":"Manage OpenCode agent engine: install, run, or check status.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","status","stop"]},"args":{"type":"string"}},"required":["action"]}}
     ]
@@ -190,6 +191,16 @@ def dispatch_mcp_tool(name, args):
         status,result=discover_provider_models(args.get("provider"),args.get("api_key"))
         if status!=200: raise RuntimeError(result.get("error","Provider model discovery failed")+(": "+result.get("detail","") if result.get("detail") else ""))
         return result
+    if name=="provider_models_saved_list":
+        pid=str(args.get("provider","")).strip().lower()
+        provider=PROVIDERS.get(pid)
+        if not provider: raise ValueError("Unsupported provider")
+        saved=readj(KEYS/(provider["key"]+".json"),{})
+        api_key=str(saved.get("value","")).strip()
+        if not api_key: raise RuntimeError("No saved API key for "+provider["name"]+". Save the key once in Integrations first.")
+        status,payload=discover_provider_models(pid,api_key)
+        if status!=200: raise RuntimeError(str(payload.get("error","Model lookup failed"))+(": "+str(payload.get("detail")) if payload.get("detail") else ""))
+        return payload
     if name=="provider_chat":
         status,result=provider_chat(args)
         return result
