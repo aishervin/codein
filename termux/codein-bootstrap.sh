@@ -134,5 +134,4 @@ PY
 echo "============================================================"
 echo "This token is private. Do not share it or post a screenshot."
 echo
-echo "[Codein] Start the bridge with:"
-echo "python $ROOT/server.py"
+echo "[Codein] Bridge log: $ROOT/logs/server.log"
