@@ -133,7 +133,7 @@ echo "[Codein] Keep Termux open while Codein uses it."
 echo
 echo "[Codein] Preparing OpenCode agent API (no browser UI)..."
 if "$ROOT/bin/codein-opencode" start; then
-  echo "[Codein] OpenCode runtime ready on http://127.0.0.1:4097"
+  echo "[Codein] OpenCode runtime ready on http://127.0.0.1:4096"
 else
   echo "[Codein] OpenCode runtime could not start. The existing Codein bridge remains available."
   echo "[Codein] Check: $ROOT/logs/opencode.log"
