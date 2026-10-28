@@ -87,7 +87,8 @@ def mcp_tools_catalog():
         {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. Use only for actions authorized by the user.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
         {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}},
-        {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}}
+        {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}},
+        {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}}
     ]
 
 def dispatch_mcp_tool(name, args):
@@ -121,6 +122,9 @@ def dispatch_mcp_tool(name, args):
         status,result=discover_provider_models(args.get("provider"),args.get("api_key"))
         if status!=200: raise RuntimeError(result.get("error","Provider model discovery failed")+(": "+result.get("detail","") if result.get("detail") else ""))
         return result
+    if name=="provider_chat":
+        status,result=provider_chat(args)
+        return result
     raise ValueError("Unknown MCP tool: "+str(name))
 
 def provider_chat(data):
@@ -142,7 +146,9 @@ def provider_chat(data):
         if content: clean.append({"role":role,"content":content[:50000]})
     system=str(data.get("system",""))[:30000]
     timeout=max(10,min(int(data.get("timeout",120)),180))
-    tool_catalog=mcp_tools_catalog()
+    # Provider-native model calls receive only local action tools. Avoid recursion
+    # and don't ask the model to invent API keys for provider discovery.
+    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list")]
     try:
         if provider["kind"]=="gemini":
             contents=[]
@@ -315,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
         params=message.get("params") or {}
         # MCP notifications have no request ID and must not receive a JSON-RPC response.
         if request_id is None:
-            self.sendj(202,{"ok":True})
+            self.send_response(202); self.send_header("Content-Length","0"); self.end_headers()
             return
         if method=="initialize":
             return self.mcp_result(request_id,{
