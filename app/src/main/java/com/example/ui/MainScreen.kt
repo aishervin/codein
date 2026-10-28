@@ -155,6 +155,10 @@ private const val APP_LOCKED_KEY = "app_locked"
 private const val CHAT_HISTORY_PREFS = "codein_local_chat_history"
 private const val ACTIVE_CHAT_KEY = "active_chat"
 private const val SAVED_CHATS_KEY = "saved_chats"
+private const val MODEL_PREFS = "codein_model_state"
+private const val MODEL_CATALOG_KEY = "provider_models"
+private const val SELECTED_MODEL_KEY = "selected_model"
+private const val SELECTED_PROVIDER_KEY = "selected_provider"
 
 private data class ChatMessage(
     val user: Boolean,
@@ -298,6 +302,7 @@ private fun MainChatScreen(
     var showSafetyWarning by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val chatPrefs = remember(context) { context.getSharedPreferences(CHAT_HISTORY_PREFS, Context.MODE_PRIVATE) }
+    val modelPrefs = remember(context) { context.getSharedPreferences(MODEL_PREFS, Context.MODE_PRIVATE) }
     val bridge = remember { CodeinChatBridge() }
     val messages = remember(chatPrefs) {
         mutableStateListOf<ChatMessage>().apply {
@@ -317,8 +322,24 @@ private fun MainChatScreen(
     var input by remember { mutableStateOf("") }
     var attachment by remember { mutableStateOf<CodeinAttachment?>(null) }
     var pendingDownload by remember { mutableStateOf<DownloadPayload?>(null) }
-    var selectedModel by remember { mutableStateOf(codeinModels.first()) }
-    val availableModels = remember { mutableStateListOf<CodeinModel>().apply { addAll(codeinModels) } }
+    val availableModels = remember(modelPrefs) {
+        mutableStateListOf<CodeinModel>().apply {
+            addAll(codeinModels)
+            val stored = runCatching { JSONArray(modelPrefs.getString(MODEL_CATALOG_KEY, "[]")) }.getOrDefault(JSONArray())
+            for (index in 0 until stored.length()) {
+                val item = stored.optJSONObject(index) ?: continue
+                val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val provider = item.optString("provider").takeIf { it.isNotBlank() }
+                val model = CodeinModel(id, item.optString("suffix", id), provider)
+                if (none { it.id == model.id && it.providerId == model.providerId }) add(model)
+            }
+        }
+    }
+    var selectedModel by remember(modelPrefs) {
+        val id = modelPrefs.getString(SELECTED_MODEL_KEY, "zero") ?: "zero"
+        val provider = modelPrefs.getString(SELECTED_PROVIDER_KEY, "")?.takeIf { it.isNotBlank() }
+        mutableStateOf(availableModels.firstOrNull { it.id == id && it.providerId == provider } ?: codeinModels.first())
+    }
     var showSettings by remember { mutableStateOf(false) }
     var showTermuxRoom by remember { mutableStateOf(false) }
     var sharedRoomContext by remember { mutableStateOf("") }
@@ -369,6 +390,19 @@ private fun MainChatScreen(
 
     fun persistActiveChat() {
         chatPrefs.edit().putString(ACTIVE_CHAT_KEY, encodeChatMessages(messages).toString()).apply()
+    }
+
+    fun persistModel(model: CodeinModel) {
+        if (availableModels.none { it.id == model.id && it.providerId == model.providerId }) availableModels.add(model)
+        val catalog = JSONArray()
+        availableModels.forEach { item ->
+            catalog.put(JSONObject().put("id", item.id).put("suffix", item.suffix).put("provider", item.providerId ?: ""))
+        }
+        modelPrefs.edit()
+            .putString(MODEL_CATALOG_KEY, catalog.toString())
+            .putString(SELECTED_MODEL_KEY, model.id)
+            .putString(SELECTED_PROVIDER_KEY, model.providerId ?: "")
+            .apply()
     }
 
     fun archiveCurrentChat() {
@@ -705,7 +739,7 @@ private fun MainChatScreen(
                     CodeinHeader(
                         selectedModel = selectedModel,
                         models = availableModels,
-                        onSelectModel = { selectedModel = it },
+                        onSelectModel = { selectedModel = it; persistModel(it) },
                         onNewChat = ::clearChat,
                         onHistory = { showHistory = true },
                         onSettings = { showSettings = true },
@@ -869,6 +903,7 @@ private fun MainChatScreen(
             onModelSelected = { model ->
                 if (availableModels.none { it.id == model.id && it.providerId == model.providerId }) availableModels.add(model)
                 selectedModel = model
+                persistModel(model)
             }
         )
     }
@@ -1891,12 +1926,18 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     Text(skillNames.joinToString("  ·  "), color = TextMuted, fontSize = 11.sp)
                 }
                 Text("مدل‌های هوش مصنوعی", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                var aiProviderId by remember { mutableStateOf("gemini") }
+                val integrationPrefs = remember(context) { context.getSharedPreferences("codein_integrations", Context.MODE_PRIVATE) }
+                var aiProviderId by remember(integrationPrefs) { mutableStateOf(integrationPrefs.getString("ai_provider", "gemini") ?: "gemini") }
                 var aiProviderMenuExpanded by remember { mutableStateOf(false) }
                 var aiModelMenuExpanded by remember { mutableStateOf(false) }
                 var aiKeyValue by remember { mutableStateOf("") }
-                var aiModels by remember { mutableStateOf(emptyList<String>()) }
-                var selectedAiModel by remember { mutableStateOf("") }
+                var aiModels by remember(integrationPrefs, aiProviderId) {
+                    val cached = runCatching { JSONArray(integrationPrefs.getString("models_$aiProviderId", "[]")) }.getOrDefault(JSONArray())
+                    mutableStateOf((0 until cached.length()).map { cached.optString(it) }.filter(String::isNotBlank))
+                }
+                var selectedAiModel by remember(integrationPrefs, aiProviderId) {
+                    mutableStateOf(integrationPrefs.getString("selected_model_$aiProviderId", "") ?: "")
+                }
                 var providerHelp by remember { mutableStateOf(false) }
                 val aiProviders = listOf(
                     "Google Gemini" to "gemini",
@@ -1932,8 +1973,9 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         aiProviders.forEach { (label, id) ->
                             DropdownMenuItem(text = { Text(label) }, onClick = {
                                 aiProviderId = id
-                                aiModels = emptyList()
-                                selectedAiModel = ""
+                                aiModels = runCatching { JSONArray(integrationPrefs.getString("models_$id", "[]")) }.getOrDefault(JSONArray()).let { array -> (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank) }
+                                selectedAiModel = integrationPrefs.getString("selected_model_$id", "") ?: ""
+                                integrationPrefs.edit().putString("ai_provider", id).apply()
                                 aiProviderMenuExpanded = false
                             })
                         }
@@ -1946,8 +1988,8 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Button(
-                    enabled = !busy && token.isNotBlank() && aiKeyValue.isNotBlank(),
+                OutlinedButton(
+                    enabled = !busy && token.isNotBlank() && savedKeys.contains("${aiProviderId}_api_key"),
                     onClick = {
                         busy = true
                         client.baseUrl = baseUrl
@@ -1955,10 +1997,13 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         scope.launch {
                             runCatching {
                                 client.health()
-                                client.discoverModels(aiProviderId, aiKeyValue)
+                                client.discoverSavedModels(aiProviderId)
                             }.onSuccess { models ->
                                 aiModels = models
                                 selectedAiModel = models.firstOrNull().orEmpty()
+                                integrationPrefs.edit().putString("models_$aiProviderId", JSONArray(models).toString())
+                                    .putString("selected_model_$aiProviderId", selectedAiModel)
+                                    .putString("ai_provider", aiProviderId).apply()
                                 status = "استعلام موفق · ${models.size} مدل در دسترس"
                                 output = "فهرست مدل‌ها از API زنده سرویس دریافت شد؛ هیچ شناسه‌ای از پیش حدس زده نشده."
                             }.onFailure { error ->
@@ -1970,7 +2015,12 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "در حال استعلام…" else "استعلام مدل‌های در دسترس") }
+                ) { Text(if (busy) "در حال استعلام…" else "استعلام با کلید ذخیره‌شده") }
+                if (savedKeys.contains("${aiProviderId}_api_key")) {
+                    Text("کلید این سرویس قبلاً ذخیره شده؛ لازم نیست دوباره واردش کنی.", color = Color(0xFF4DDB8A), fontSize = 11.sp)
+                } else {
+                    Text("برای اولین اتصال، کلید را وارد و یک‌بار ذخیره کن.", color = TextMuted, fontSize = 11.sp)
+                }
                 if (aiModels.isNotEmpty()) {
                     Box {
                         OutlinedButton(onClick = { aiModelMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
@@ -1981,6 +2031,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                             aiModels.forEach { modelId ->
                                 DropdownMenuItem(text = { Text(modelId) }, onClick = {
                                     selectedAiModel = modelId
+                                    integrationPrefs.edit().putString("selected_model_$aiProviderId", modelId).putString("ai_provider", aiProviderId).apply()
                                     aiModelMenuExpanded = false
                                 })
                             }
@@ -1999,6 +2050,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                                     onRoomContextLoaded(room)
                                     onModelSelected(CodeinModel(selectedAiModel, "$providerName · $selectedAiModel", aiProviderId))
                                     savedKeys = (savedKeys + "${aiProviderId}_api_key").distinct()
+                                    integrationPrefs.edit().putString("ai_provider", aiProviderId).putString("selected_model_$aiProviderId", selectedAiModel).apply()
                                     aiKeyValue = ""
                                     status = "مدل انتخاب شد · $selectedAiModel"
                                     output = "کلید در خزانه محلی ذخیره شد و مدل انتخاب‌شده فعال شد."
