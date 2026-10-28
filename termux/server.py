@@ -86,7 +86,8 @@ def mcp_tools_catalog():
     return [
         {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. Use only for actions authorized by the user.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
-        {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}}
+        {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}}
     ]
 
 def dispatch_mcp_tool(name, args):
@@ -116,6 +117,10 @@ def dispatch_mcp_tool(name, args):
         return {"root":str(ROOT),"workspace":str(WORKSPACE),"room":room_file.read_text(encoding="utf-8") if room_file.exists() else "","state":readj(ROOT/"state.json",{}),"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file()),"events":events,"sessions":sessions,"skills":skills}
     if name=="credentials_list":
         return {"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file())}
+    if name=="provider_models_list":
+        status,result=discover_provider_models(args.get("provider"),args.get("api_key"))
+        if status!=200: raise RuntimeError(result.get("error","Provider model discovery failed")+(": "+result.get("detail","") if result.get("detail") else ""))
+        return result
     raise ValueError("Unknown MCP tool: "+str(name))
 
 def provider_chat(data):
