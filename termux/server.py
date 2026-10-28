@@ -346,6 +346,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_mcp(self):
         if not self.auth(): return self.mcp_error(None,-32001,"Authorization required",status=401)
+        origin=self.headers.get("Origin")
+        allowed_origins={"http://127.0.0.1:"+str(PORT),"http://localhost:"+str(PORT)}
+        if origin and origin not in allowed_origins:
+            return self.mcp_error(None,-32003,"Origin not allowed",status=403)
         try: message=self.body()
         except Exception: return self.mcp_error(None,-32700,"Parse error",status=400)
         if not isinstance(message,dict) or message.get("jsonrpc")!="2.0" or not isinstance(message.get("method"),str):
