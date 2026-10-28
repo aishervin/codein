@@ -1137,6 +1137,7 @@ private fun ChatBubble(
     onRetry: (ChatMessage) -> Unit,
     onDownload: (String, String) -> Unit
 ) {
+    val context = LocalContext.current
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Box(Modifier.fillMaxWidth(), contentAlignment = if (message.user) Alignment.CenterEnd else Alignment.CenterStart) {
             Surface(
