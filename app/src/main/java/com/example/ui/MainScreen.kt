@@ -1759,6 +1759,9 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
     var terminalCommand by remember { mutableStateOf("") }
     var terminalOutput by remember { mutableStateOf("") }
     var skillNames by remember { mutableStateOf(emptyList<String>()) }
+    var composioKey by remember { mutableStateOf("") }
+    var composioStatus by remember { mutableStateOf("Composio هنوز پیکربندی نشده") }
+    var composioTools by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
     var busy by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -1837,6 +1840,49 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     }) { Text("توقف") }
                 }
 
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
+                Text("COMPOSIO · اتصال سرویس‌ها", color = NeonOrangeSoft, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("ابزارهای واقعی سرویس‌های متصل را از Composio دریافت کن؛ کلید فقط در Termux ذخیره می‌شود.", color = TextMuted, fontSize = 11.sp)
+                OutlinedTextField(value = composioKey, onValueChange = { composioKey = it }, label = { Text("Composio Consumer Key (ck_…)") }, placeholder = { Text("ck_…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(enabled = !busy && composioKey.trim().startsWith("ck_"), onClick = {
+                        busy = true
+                        scope.launch {
+                            runCatching { client.configureComposio(composioKey); client.refreshComposioTools() }.onSuccess { result ->
+                                val array = result.optJSONArray("tools") ?: JSONArray()
+                                composioTools = (0 until array.length()).mapNotNull { index -> val item = array.optJSONObject(index) ?: return@mapNotNull null; item.optString("name").takeIf { it.isNotBlank() }?.let { it to item.optString("description") } }
+                                composioKey = ""
+                                composioStatus = "متصل · ${composioTools.size} ابزار زنده دریافت شد"
+                            }.onFailure { composioStatus = "اتصال ناموفق: " + (it.message ?: "خطای نامشخص").take(220) }
+                            busy = false
+                        }
+                    }) { Text(if (busy) "در حال اتصال…" else "ذخیره و دریافت ابزارها") }
+                    TextButton(enabled = !busy, onClick = {
+                        busy = true
+                        scope.launch {
+                            runCatching { client.refreshComposioTools() }.onSuccess { result ->
+                                val array = result.optJSONArray("tools") ?: JSONArray()
+                                composioTools = (0 until array.length()).mapNotNull { index -> val item = array.optJSONObject(index) ?: return@mapNotNull null; item.optString("name").takeIf { it.isNotBlank() }?.let { it to item.optString("description") } }
+                                composioStatus = "${composioTools.size} ابزار زنده دریافت شد"
+                            }.onFailure { composioStatus = "خطا: " + (it.message ?: "کلید را ذخیره و سرویس را متصل کن").take(220) }
+                            busy = false
+                        }
+                    }) { Text("تازه‌سازی") }
+                }
+                Text(composioStatus, color = if (composioStatus.startsWith("متصل") || composioStatus.startsWith("درست")) Color(0xFF4DDB8A) else NeonOrangeSoft, fontSize = 11.sp)
+                if (composioTools.isNotEmpty()) {
+                    Text("ابزارهای در دسترس", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    composioTools.forEach { (name, description) ->
+                        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text(name.removePrefix("composio__"), fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                if (description.isNotBlank()) Text(description, color = TextMuted, fontSize = 10.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                } else {
+                    Text("بعد از اتصال موفق، فقط ابزارهایی که Composio واقعاً برمی‌گرداند اینجا نمایش داده می‌شوند؛ سپس ایجنت می‌تواند آن‌ها را فراخوانی کند.", color = TextMuted, fontSize = 10.sp)
+                }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
                 Text("SKILLS · مهارت‌های در دسترس", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 if (skillNames.isEmpty()) {

@@ -197,6 +197,16 @@ class TermuxBridgeClient(context: Context) {
         }
     }
 
+    /** Save the Composio Connect consumer key in the Termux-only vault. */
+    suspend fun configureComposio(consumerKey: String): JSONObject {
+        require(consumerKey.trim().startsWith("ck_")) { "Composio consumer key must start with ck_" }
+        return mcpTool("composio_configure", JSONObject().put("consumer_api_key", consumerKey.trim()), 45)
+    }
+
+    /** Refresh the live Composio tool list from the connected Termux MCP server. */
+    suspend fun refreshComposioTools(): JSONObject =
+        mcpTool("composio_tools_refresh", JSONObject(), 90)
+
     private suspend fun mcpTool(name: String, arguments: JSONObject, timeoutSeconds: Int = 45): JSONObject {
         val result = mcpRequest("tools/call", JSONObject().put("name", name).put("arguments", arguments), timeoutSeconds)
         if (result.optBoolean("isError")) {
