@@ -118,7 +118,12 @@ internal fun TerminalTracePanel(command: String, output: String, exitCode: Int) 
 }
 
 @Composable
-internal fun TermuxPermissionPanel(command: String, onAllow: () -> Unit, onDeny: () -> Unit) {
+internal fun TermuxPermissionPanel(
+    command: String,
+    onAllowOnce: () -> Unit,
+    onAlwaysAllow: () -> Unit,
+    onDeny: () -> Unit
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .8f),
         shape = RoundedCornerShape(13.dp),
@@ -141,12 +146,17 @@ internal fun TermuxPermissionPanel(command: String, onAllow: () -> Unit, onDeny:
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(7.dp)).padding(8.dp)
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onAllow, colors = ButtonDefaults.buttonColors(containerColor = NeonOrange)) {
-                    Text("اجازه و اجرا")
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onAllowOnce, colors = ButtonDefaults.buttonColors(containerColor = NeonOrange)) {
+                        Text("فقط این بار")
+                    }
+                    OutlinedButton(onClick = onDeny) {
+                        Text("رد کردن")
+                    }
                 }
-                OutlinedButton(onClick = onDeny) {
-                    Text("رد کردن")
+                TextButton(onClick = onAlwaysAllow) {
+                    Text("همیشه برای همین دستور", color = NeonOrangeSoft, fontSize = 11.sp)
                 }
             }
         }
