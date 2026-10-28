@@ -165,7 +165,12 @@ private data class ChatMessage(
     val user: Boolean,
     val text: String,
     val attachmentName: String? = null,
-    val requestText: String = text
+    val requestText: String = text,
+    val reasoning: String = "",
+    val kind: String = "message",
+    val command: String = "",
+    val output: String = "",
+    val exitCode: Int = -1
 )
 
 private fun encodeChatMessages(messages: List<ChatMessage>): JSONArray = JSONArray().apply {
@@ -174,7 +179,12 @@ private fun encodeChatMessages(messages: List<ChatMessage>): JSONArray = JSONArr
             .put("user", message.user)
             .put("text", message.text)
             .put("attachment", message.attachmentName ?: JSONObject.NULL)
-            .put("request", message.requestText))
+            .put("request", message.requestText)
+            .put("reasoning", message.reasoning)
+            .put("kind", message.kind)
+            .put("command", message.command)
+            .put("output", message.output)
+            .put("exit_code", message.exitCode))
     }
 }
 
@@ -185,7 +195,12 @@ private fun decodeChatMessages(array: JSONArray): List<ChatMessage> =
             user = item.optBoolean("user"),
             text = item.optString("text"),
             attachmentName = item.optString("attachment").takeIf { it.isNotBlank() && it != "null" },
-            requestText = item.optString("request", item.optString("text"))
+            requestText = item.optString("request", item.optString("text")),
+            reasoning = item.optString("reasoning"),
+            kind = item.optString("kind", "message"),
+            command = item.optString("command"),
+            output = item.optString("output"),
+            exitCode = item.optInt("exit_code", -1)
         )
     }
 
@@ -560,6 +575,56 @@ private fun MainChatScreen(
         sendRequest(message.text, message.requestText, message.attachmentName, history)
     }
 
+    fun handleTermuxPermission(message: ChatMessage, allow: Boolean) {
+        val index = messages.indexOf(message)
+        if (index < 0 || message.kind != "permission") return
+        messages.removeAt(index)
+        if (!allow) {
+            messages.add(ChatMessage(user = false, text = "اجرای فرمان توسط کاربر رد شد؛ هیچ دستوری اجرا نشد."))
+            return
+        }
+        isStreaming = true
+        agentScope.launch {
+            runCatching { termuxClient.execute(message.command) }
+                .onSuccess { result ->
+                    val exitCode = result.optInt("exit_code", -1)
+                    val stdout = result.optString("stdout").takeLast(12000)
+                    val stderr = result.optString("stderr").takeLast(6000)
+                    val combined = buildString {
+                        if (stdout.isNotBlank()) append(stdout)
+                        if (stderr.isNotBlank()) {
+                            if (isNotEmpty()) append("\\n")
+                            append("STDERR:\\n").append(stderr)
+                        }
+                        if (result.has("error")) append("\\nERROR: ").append(result.optString("error"))
+                    }.ifBlank { "(بدون خروجی)" }
+                    messages.add(ChatMessage(
+                        user = false,
+                        text = "فرمان Termux اجرا شد (exit $exitCode)",
+                        kind = "tool",
+                        command = message.command,
+                        output = combined,
+                        exitCode = exitCode
+                    ))
+                    runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
+                    val toolResult = "Termux execution result (exit code $exitCode):\\n$combined\\nContinue the original task using this result. Do not repeat successful work."
+                    isStreaming = false
+                    sendRequest("Termux tool result", toolResult, null, messages.toList())
+                }
+                .onFailure { error ->
+                    messages.add(ChatMessage(
+                        user = false,
+                        text = "اجرای فرمان ناموفق بود.",
+                        kind = "tool",
+                        command = message.command,
+                        output = error.message ?: "خطای نامشخص",
+                        exitCode = -1
+                    ))
+                    isStreaming = false
+                }
+        }
+    }
+
     bridge.onStarted = { isStreaming = true }
     bridge.onConnection = { connected ->
         if (connected) {
@@ -582,6 +647,9 @@ private fun MainChatScreen(
         rawModelAnswer = ""
         val keyMatch = Regex("""\[\[CODEIN_SAVE_KEY\s+([A-Za-z0-9._-]+)\]\]([\s\S]*?)\[\[/CODEIN_SAVE_KEY\]\]""").find(response)
         val toolMatch = Regex("""\[\[CODEIN_TERMUX_EXEC\]\]([\s\S]*?)\[\[/CODEIN_TERMUX_EXEC\]\]""").find(response)
+        val reasoningMatch = Regex("""<(?:think|analysis|reasoning)>\s*([\s\S]*?)\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).find(response)
+        val visibleResponse = Regex("""<(?:think|analysis|reasoning)>\s*[\s\S]*?\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).replace(response, "").trim()
+        val capturedReasoning = reasoningMatch?.groupValues?.getOrNull(1)?.trim().orEmpty().take(20000)
         if (keyMatch != null && keyMatch.groupValues[2].isNotBlank() && sharedRoomContext.isNotBlank()) {
             val name = keyMatch.groupValues[1].trim()
             val secret = keyMatch.groupValues[2].trim()
@@ -612,32 +680,45 @@ private fun MainChatScreen(
             activeAnswer = ""
             isStreaming = false
             agentToolCalls += 1
-            messages.add(ChatMessage(user = false, text = "⚙ Executing in Termux…"))
-            agentScope.launch {
-                val execution = runCatching { termuxClient.execute(command) }
-                if (execution.isSuccess) {
-                    val result = execution.getOrThrow()
-                    runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
-                    val toolResult = buildString {
-                        append("Termux execution result (exit code ")
-                        append(result.optInt("exit_code", -1))
-                        append("):\n")
-                        append(result.optString("stdout").takeLast(10000))
-                        if (result.optString("stderr").isNotBlank()) {
-                            append("\nSTDERR:\n")
-                            append(result.optString("stderr").takeLast(4000))
-                        }
-                        if (result.has("error")) append("\nERROR: ").append(result.optString("error"))
-                        append("\nContinue the original task using this result. Do not repeat successful work.")
+            messages.add(ChatMessage(
+                user = false,
+                text = "اجازه اجرای فرمان در Termux لازم است.",
+                kind = "permission",
+                command = command
+            ))
+        } else {
+            if (visibleResponse.isNotBlank()) {
+                messages.add(ChatMessage(
+                    user = false,
+                    text = visibleResponse,
+                    reasoning = capturedReasoning
+                ))
+                if (sharedRoomContext.isNotBlank()) {
+                    val taskTitle = messages.lastOrNull { it.user && it.text != "Termux tool result" }?.text?.take(120) ?: "Codein session"
+                    agentScope.launch {
+                        runCatching {
+                            termuxClient.saveSession(
+                                "session-" + System.currentTimeMillis(),
+                                taskTitle,
+                                visibleResponse.takeLast(6000),
+                                "Resume from the latest saved Agent Room context"
+                            )
+                            termuxClient.updateState(
+                                JSONObject()
+                                    .put("last_task", taskTitle)
+                                    .put("recent_changes", JSONArray().put("Assistant completed: " + taskTitle))
+                            )
+                            termuxClient.recordEvent("assistant_turn_completed", taskTitle)
+                            termuxClient.roomContext()
+                        }.getOrNull()?.let { sharedRoomContext = it.toString() }
                     }
-                    sendRequest("Termux tool result", toolResult, null, messages.toList())
-                } else {
-                    messages.add(ChatMessage(user = false, text = "Termux execution failed: " + (execution.exceptionOrNull()?.message ?: "unknown error")))
-                    isStreaming = false
                 }
             }
-        } else {
-            if (response.isNotBlank()) {
+            activeAnswer = ""
+            isStreaming = false
+        }
+    }
+    bridge.onError = {
                 messages.add(ChatMessage(user = false, text = response))
                 if (sharedRoomContext.isNotBlank()) {
                     val taskTitle = messages.lastOrNull { it.user && it.text != "Termux tool result" }?.text?.take(120) ?: "Codein session"
@@ -806,7 +887,9 @@ private fun MainChatScreen(
                                     message = message,
                                     onCopy = ::copyToClipboard,
                                     onRetry = ::retryMessage,
-                                    onDownload = ::downloadText
+                                    onDownload = ::downloadText,
+                                    onApproveCommand = { handleTermuxPermission(it, true) },
+                                    onDenyCommand = { handleTermuxPermission(it, false) }
                                 )
                             }
                             if (isStreaming) {
@@ -820,7 +903,9 @@ private fun MainChatScreen(
                                          message = ChatMessage(false, activeAnswer),
                                          onCopy = ::copyToClipboard,
                                          onRetry = ::retryMessage,
-                                         onDownload = ::downloadText
+                                         onDownload = ::downloadText,
+                                         onApproveCommand = { handleTermuxPermission(it, true) },
+                                         onDenyCommand = { handleTermuxPermission(it, false) }
                                      )
                                  }
                              }
@@ -1171,7 +1256,9 @@ private fun ChatBubble(
     message: ChatMessage,
     onCopy: (String) -> Unit,
     onRetry: (ChatMessage) -> Unit,
-    onDownload: (String, String) -> Unit
+    onDownload: (String, String) -> Unit,
+    onApproveCommand: (ChatMessage) -> Unit = {},
+    onDenyCommand: (ChatMessage) -> Unit = {}
 ) {
     val context = LocalContext.current
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -1217,7 +1304,22 @@ private fun ChatBubble(
                         }
                     }
                     Spacer(Modifier.height(7.dp))
-                    splitMessage(message.text).forEach { part ->
+                    if (message.reasoning.isNotBlank()) {
+                        ReasoningTracePanel(message.reasoning)
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    when (message.kind) {
+                        "permission" -> TermuxPermissionPanel(
+                            command = message.command,
+                            onAllow = { onApproveCommand(message) },
+                            onDeny = { onDenyCommand(message) }
+                        )
+                        "tool" -> TerminalTracePanel(
+                            command = message.command,
+                            output = message.output,
+                            exitCode = message.exitCode
+                        )
+                        else -> splitMessage(message.text).forEach { part ->
                         when (part) {
                             is MessagePart.Text -> if (part.value.isNotBlank()) {
                                 val linkedText = buildAnnotatedString {
@@ -1266,7 +1368,8 @@ private fun ChatBubble(
                             is MessagePart.Code -> CodeBlock(part.language, part.value, onCopy, onDownload)
                         }
                     }
-                    if (message.text.isNotBlank()) {
+                    }
+                    if (message.text.isNotBlank() && message.kind == "message") {
                         MessageActions(
                             user = message.user,
                             onCopy = { onCopy(message.text) },
