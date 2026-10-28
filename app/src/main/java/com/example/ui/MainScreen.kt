@@ -896,12 +896,12 @@ private fun CodeinHeader(
                         letterSpacing = .7.sp
                     )
                 }
-                Box(Modifier.align(Alignment.CenterEnd)) {
-                    ModelPicker(selectedModel, onSelectModel)
-                }
             }
-            Box(Modifier.fillMaxWidth().offset(y = (-3).dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().padding(top = 2.dp), contentAlignment = Alignment.Center) {
                 ConnectionStatus(isConnected, connectionFailed, onRetry)
+            }
+            Box(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
+                ModelPicker(selectedModel, onSelectModel)
             }
         }
     }
@@ -948,13 +948,14 @@ private fun ModelPicker(selectedModel: CodeinModel, onSelectModel: (CodeinModel)
                 .clickable { expanded = true }
         ) {
             Text(
-                "SHΞN™",
-                color = MaterialTheme.colorScheme.onSurface,
+                "MODEL",
+                color = TextMuted,
                 fontFamily = FontFamily.SansSerif,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = .7.sp
             )
-            Spacer(Modifier.width(5.dp))
+            Spacer(Modifier.width(6.dp))
             ModelSuffixText(selectedModel.suffix)
             Spacer(Modifier.width(6.dp))
             Text("⌄", color = TextMuted, fontSize = 16.sp)
@@ -1620,7 +1621,6 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
     var keyName by remember { mutableStateOf("cloudflare_api_token") }
     var keyValue by remember { mutableStateOf("") }
     var savedKeys by remember { mutableStateOf(emptyList<String>()) }
-    var command by remember { mutableStateOf("pwd && ls -la") }
     var status by remember { mutableStateOf("اتصال ترموکس هنوز برقرار نشده") }
     var output by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -1675,17 +1675,35 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                 }
                 Text("کلیدهای سرویس‌ها", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Text("سرویس را انتخاب کن تا نام استاندارد کلید پر شود؛ مقدار کلید فقط یک‌بار وارد می‌شود و محلی در Termux ذخیره می‌شود.", color = TextMuted, fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    listOf("GitHub" to "github_token", "Cloudflare" to "cloudflare_api_token", "Telegram" to "telegram_bot_token").forEach { (label, value) ->
-                        TextButton(onClick = { keyName = value }) { Text(label, fontSize = 10.sp) }
+                var serviceMenuExpanded by remember { mutableStateOf(false) }
+                val serviceKeyOptions = listOf(
+                    "GitHub · token" to "github_token",
+                    "Cloudflare · API token" to "cloudflare_api_token",
+                    "Telegram · bot token" to "telegram_bot_token",
+                    "Google Gemini · API key" to "gemini_api_key",
+                    "OpenAI · API key" to "openai_api_key",
+                    "Anthropic · API key" to "anthropic_api_key",
+                    "DeepSeek · API key" to "deepseek_api_key",
+                    "OpenRouter · API key" to "openrouter_api_key",
+                    "Mistral · API key" to "mistral_api_key",
+                    "xAI · API key" to "xai_api_key",
+                    "Groq · API key" to "groq_api_key"
+                )
+                Box {
+                    OutlinedButton(onClick = { serviceMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(serviceKeyOptions.firstOrNull { it.second == keyName }?.first ?: keyName, maxLines = 1)
+                        Text("  ▾")
+                    }
+                    DropdownMenu(expanded = serviceMenuExpanded, onDismissRequest = { serviceMenuExpanded = false }) {
+                        serviceKeyOptions.forEach { (label, value) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = { keyName = value; serviceMenuExpanded = false }
+                            )
+                        }
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    listOf("Gemini" to "gemini_api_key", "OpenAI" to "openai_api_key", "Anthropic" to "anthropic_api_key", "DeepSeek" to "deepseek_api_key").forEach { (label, value) ->
-                        TextButton(onClick = { keyName = value }) { Text(label, fontSize = 10.sp) }
-                    }
-                }
-                Text("کلیدهای ذخیره‌شده: " + savedKeys.joinToString().ifBlank { "بعد از اتصال نمایش داده می‌شوند" }, color = TextMuted, fontSize = 11.sp)
+                Text(if (status.startsWith("متصل")) "کلیدهای ذخیره‌شده: " + savedKeys.joinToString().ifBlank { "هنوز کلیدی ذخیره نشده" } else "برای فعال‌شدن ذخیره، ابتدا اتصال پل محلی را برقرار کن.", color = TextMuted, fontSize = 11.sp)
                 OutlinedTextField(value = keyName, onValueChange = { keyName = it }, label = { Text("نام کلید (قابل ویرایش)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = keyValue, onValueChange = { keyValue = it }, label = { Text("مقدار کلید / توکن سرویس") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Button(
@@ -1701,26 +1719,6 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     },
                     modifier = Modifier.fillMaxWidth()
                  ) { Text("ذخیرهٔ امن کلید در Termux") }
-                Text("اجرای دستور در ترموکس", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                Text("این بخش برای کارهای فنی است؛ دستور لینوکس را اجرا می‌کند و خروجی واقعی را برمی‌گرداند. برای استفادهٔ عادی از چت لازم نیست چیزی اینجا بنویسی.", color = TextMuted, fontSize = 11.sp)
-                OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("دستور (برای نمونه: pwd)") }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 3)
-                Button(
-                    enabled = !busy && command.isNotBlank() && status.startsWith("متصل"),
-                    onClick = {
-                        busy = true
-                        scope.launch {
-                            runCatching { client.execute(command) }
-                                .onSuccess {
-                                    output = it.optString("stdout") + if (it.optString("stderr").isNotBlank()) "\n" + it.optString("stderr") else ""
-                                    if (output.isBlank()) output = "Exit code: " + it.optInt("exit_code")
-                                    status = "متصل · کد خروج " + it.optInt("exit_code", -1)
-                                }
-                                .onFailure { status = "Command failed: " + (it.message ?: "unknown error") }
-                            busy = false
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "در حال اجرا…" else "اجرای دستور") }
                 if (output.isNotBlank()) {
                     Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Text(output.takeLast(5000), color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
