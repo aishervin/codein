@@ -42,6 +42,13 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          # This repo's checked-in wrapper JAR is not in Gradle's published checksum catalog.
+          # Regenerate it from the runner's trusted Gradle installation before executing it.
+          validate-wrappers: false
+
+      - name: Regenerate trusted Gradle wrapper
+        run: gradle wrapper --gradle-version 9.3.1 --distribution-type bin
 
       - name: Build debug APK
         run: bash ./gradlew --no-daemon :app:assembleDebug
