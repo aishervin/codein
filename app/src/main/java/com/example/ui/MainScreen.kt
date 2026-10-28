@@ -502,11 +502,17 @@ private fun MainChatScreen(
                 runCatching { termuxClient.chat(selectedProviderId, selectedModelId, requestMessages, effectiveSystemPrompt) }
                     .onSuccess { result ->
                         val answer = result.optString("content")
-                        messages.add(ChatMessage(user = false, text = answer.ifBlank { "سرویس پاسخ متنی برنگرداند." }))
+                        val reasoningMatch = Regex("""<(?:think|analysis|reasoning)>\\s*([\\s\\S]*?)\\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).find(answer)
+                        val visibleAnswer = Regex("""<(?:think|analysis|reasoning)>\\s*[\\s\\S]*?\\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).replace(answer, "").trim()
+                        messages.add(ChatMessage(
+                            user = false,
+                            text = visibleAnswer.ifBlank { "سرویس پاسخ متنی برنگرداند." },
+                            reasoning = reasoningMatch?.groupValues?.getOrNull(1)?.trim().orEmpty().take(20000)
+                        ))
                         isStreaming = false
                         val title = messages.lastOrNull { it.user }?.text?.take(120) ?: "Codein session"
                         runCatching {
-                            termuxClient.saveSession("session-" + System.currentTimeMillis(), title, answer.takeLast(6000), "Continue this conversation from the local chat history")
+                            termuxClient.saveSession("session-" + System.currentTimeMillis(), title, visibleAnswer.takeLast(6000), "Continue this conversation from the local chat history")
                             termuxClient.recordEvent("assistant_turn_completed", title)
                         }
                     }
