@@ -53,7 +53,12 @@ fun CodeinSettingsSheet(
     isConnected: Boolean
 ) {
     val context = LocalContext.current
-    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+    // Keep settings controls aligned with the user's language instead of forcing
+    // English layout direction on Persian/Arabic devices.
+    val settingsDirection = if (
+        context.resources.configuration.locales[0].language in setOf("fa", "ar", "he", "ur")
+    ) LayoutDirection.Rtl else LayoutDirection.Ltr
+    CompositionLocalProvider(LocalLayoutDirection provides settingsDirection) {
         ModalBottomSheet(
             onDismissRequest = onDismiss,
             sheetState = sheetState,
