@@ -1209,9 +1209,9 @@ private fun ChatBubble(
                                     ),
                                     lineHeight = 23.sp,
                                     modifier = Modifier.fillMaxWidth(),
-                                    onClick = { offset ->
+                                    onClick = { offset: Int ->
                                         linkedText.getStringAnnotations("URL", offset, offset)
-                                            .firstOrNull()?.let { annotation ->
+                                            .firstOrNull()?.let { annotation: androidx.compose.ui.text.AnnotatedString.Range<String> ->
                                                 runCatching {
                                                     context.startActivity(
                                                         Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item))
