@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.webkit.CookieManager
@@ -63,6 +64,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -1181,24 +1183,46 @@ private fun ChatBubble(
                     splitMessage(message.text).forEach { part ->
                         when (part) {
                             is MessagePart.Text -> if (part.value.isNotBlank()) {
-                                Text(
-                                    part.value.trim(),
+                                val linkedText = buildAnnotatedString {
+                                    val value = part.value.trim()
+                                    append(value)
+                                    // Keep the original message intact while annotating each URL.
+                                    Regex("""https?://[^\\s<>]+""").findAll(value).forEach { match ->
+                                        val cleanUrl = match.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}')
+                                        if (cleanUrl.isNotBlank()) {
+                                            addStringAnnotation(
+                                                tag = "URL",
+                                                annotation = cleanUrl,
+                                                start = match.range.first,
+                                                end = match.range.first + cleanUrl.length
+                                            )
+                                        }
+                                    }
+                                }
+                                ClickableText(
+                                    text = linkedText,
                                     style = TextStyle(
                                         textDirection = TextDirection.ContentOrRtl,
-                                        shadow = SoftTextShadow
+                                        shadow = SoftTextShadow,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     ),
                                     lineHeight = 23.sp,
-                                    modifier = Modifier.fillMaxWidth().pointerInput(Unit) {
-                                        detectTapGestures(onTap = { offset ->
-                                            // Simple URL detection and opening
-                                            val urlRegex = Regex("""(https?://[^\s]+)""")
-                                            val matches = urlRegex.findAll(part.value)
-                                            matches.forEach { match ->
-                                                // This is a naive implementation; for real URL handling, 
-                                                // use TextLinkScope in M3 or similar.
-                                                // For now, let's just show an toast or try to open browser if we can detect the click.
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onClick = { offset ->
+                                        linkedText.getStringAnnotations("URL", offset, offset)
+                                            .firstOrNull()?.let { annotation ->
+                                                runCatching {
+                                                    context.startActivity(
+                                                        Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item))
+                                                    )
+                                                }.onFailure {
+                                                    android.widget.Toast.makeText(
+                                                        context,
+                                                        "لینک قابل باز کردن نیست",
+                                                        android.widget.Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
                                             }
-                                        })
                                     }
                                 )
                             }
