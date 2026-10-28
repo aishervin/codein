@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Codein local Termux bridge. Python standard library only."""
-import json, os, subprocess, time
+import hashlib, json, os, subprocess, time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,8 +14,8 @@ CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exis
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
 WORKSPACE=Path(CONFIG.get("workspace",str(ROOT/"workspace"))).expanduser()
-KEYS=ROOT/"keys"; EVENTS=ROOT/"events"; SESSIONS=ROOT/"sessions"
-for d in (WORKSPACE,KEYS,EVENTS,SESSIONS,ROOT/"agents",ROOT/"skills",ROOT/"tools",ROOT/"logs"): d.mkdir(parents=True,exist_ok=True)
+KEYS=ROOT/"keys"; EVENTS=ROOT/"events"; SESSIONS=ROOT/"sessions"; PERMISSIONS=ROOT/"permissions"
+for d in (WORKSPACE,KEYS,EVENTS,SESSIONS,PERMISSIONS,ROOT/"agents",ROOT/"skills",ROOT/"tools",ROOT/"logs"): d.mkdir(parents=True,exist_ok=True)
 
 def now(): return datetime.now(timezone.utc).isoformat()
 PROVIDERS = {
@@ -102,7 +102,8 @@ def mcp_tools_catalog():
     local_tools = [
         {"name":"composio_configure","description":"Save a Composio Connect consumer key in the private Termux credential vault. Never print the key.","inputSchema":{"type":"object","properties":{"consumer_api_key":{"type":"string","description":"Composio Connect consumer key (ck_...)"}}, "required":["consumer_api_key"]}},
         {"name":"composio_tools_refresh","description":"Discover tools available from Composio Connect after apps have been connected.","inputSchema":{"type":"object","properties":{}}},
-        {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. Use only for actions authorized by the user.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
+        {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. This tool requires explicit user approval for each command.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
+        {"name":"termux_command_approve","description":"Record user approval for the exact shell command shown in the app permission prompt. Do not call unless the user explicitly approved it.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Exact command approved by the user"},"always":{"type":"boolean","default":False,"description":"Persist approval for this exact command string"}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
         {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}},
         {"name":"credential_save","description":"Save a user-provided API credential into the private local Termux vault. Never echo the value.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}},"required":["name","value"]}},
@@ -136,10 +137,37 @@ def dispatch_mcp_tool(name, args):
         result=composio_connect.call_tool(key,name[len("composio__"):],args)
         event("composio_tool_called",{"tool":name})
         return result
+    if name=="termux_command_approve":
+        command=str(args.get("command","")).strip()
+        if not command: raise ValueError("Command is empty")
+        if bool(args.get("always",False)):
+            policy_path=PERMISSIONS/"always.json"
+            policy=readj(policy_path,{"commands":[]})
+            commands=set(str(item) for item in policy.get("commands",[]) if isinstance(item,str))
+            commands.add(command)
+            policy_path.write_text(json.dumps({"commands":sorted(commands),"updated_at":now()},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+            policy_path.chmod(0o600)
+            event("command_always_allowed",{"command":command[:500]})
+            return {"ok":True,"approved_always":True}
+        approval=PERMISSIONS/(hashlib.sha256(command.encode("utf-8")).hexdigest()+".json")
+        approval.write_text(json.dumps({"command":command,"approved_at":now()},ensure_ascii=False),encoding="utf-8")
+        approval.chmod(0o600)
+        event("command_approval_granted",{"command":command[:500]})
+        return {"ok":True,"approved_once":True}
     if name=="termux_exec":
         command=str(args.get("command","")).strip()
         timeout=max(1,min(int(args.get("timeout",120)),900))
         if not command: raise ValueError("Command is empty")
+        policy=readj(PERMISSIONS/"always.json",{"commands":[]})
+        always_allowed=command in policy.get("commands",[])
+        approval=PERMISSIONS/(hashlib.sha256(command.encode("utf-8")).hexdigest()+".json")
+        approved=readj(approval,{})
+        if not always_allowed and approved.get("command") != command:
+            event("command_permission_requested",{"command":command[:500]})
+            return {"permission_required":True,"command":command}
+        if not always_allowed:
+            try: approval.unlink()
+            except OSError: pass
         event("command_started",{"command":command[:500]}); start=time.monotonic()
         try:
             run=subprocess.run(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),capture_output=True,text=True,timeout=timeout,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)})
@@ -244,7 +272,7 @@ def provider_chat(data):
     timeout=max(10,min(int(data.get("timeout",120)),180))
     # Provider-native model calls receive only local action tools. Avoid recursion
     # and don't ask the model to invent API keys for provider discovery.
-    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save")]
+    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve")]
     try:
         if provider["kind"]=="gemini":
             contents=[]
@@ -274,6 +302,8 @@ def provider_chat(data):
                     arguments=call.get("args") or {}
                     try: tool_result=dispatch_mcp_tool(tool_name,arguments)
                     except Exception as exc: tool_result={"error":str(exc)[:1500]}
+                    if isinstance(tool_result,dict) and tool_result.get("permission_required"):
+                        return 200,{"ok":True,"permission_required":True,"command":str(tool_result.get("command",""))}
                     tool_responses.append({"functionResponse":{"name":tool_name,"response":{"result":tool_result}}})
                 contents.append({"role":"user","parts":tool_responses})
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
@@ -300,6 +330,8 @@ def provider_chat(data):
                 for call in tool_uses[:12]:
                     try: result=dispatch_mcp_tool(str(call.get("name","")),call.get("input") or {})
                     except Exception as exc: result={"error":str(exc)[:1500]}
+                    if isinstance(result,dict) and result.get("permission_required"):
+                        return 200,{"ok":True,"permission_required":True,"command":str(result.get("command",""))}
                     results.append({"type":"tool_result","tool_use_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
                 msgs.append({"role":"user","content":results})
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
@@ -328,6 +360,8 @@ def provider_chat(data):
                     except ValueError: arguments={}
                     try: result=dispatch_mcp_tool(name,arguments)
                     except Exception as exc: result={"error":str(exc)[:1500]}
+                    if isinstance(result,dict) and result.get("permission_required"):
+                        return 200,{"ok":True,"permission_required":True,"command":str(result.get("command",""))}
                     msgs.append({"role":"tool","tool_call_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         if not answer: return 502,{"ok":False,"error":"Provider returned an empty response","provider":pid,"model":model}
