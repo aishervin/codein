@@ -6,6 +6,8 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -75,7 +77,7 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(status, 202)
         _, response = self.rpc("tools/list")
         names = {tool["name"] for tool in response["result"]["tools"]}
-        self.assertTrue({"termux_exec", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_chat"} <= names)
+        self.assertTrue({"termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_chat"} <= names)
 
     def test_local_agent_room_tools(self):
         saved = self.call_tool("credential_save", {"name": "test_key", "value": "unit-secret"})
@@ -90,6 +92,25 @@ class McpTransportTests(unittest.TestCase):
         session = self.call_tool("session_save", {"id": "mcp-test", "title": "Smoke test", "summary": "ok"})
         self.assertEqual(session["id"], "mcp-test")
         self.assertTrue(self.call_tool("event_record", {"kind": "test", "summary": "mcp smoke"})["ok"])
+
+    def test_termux_exec_requires_exact_one_time_approval(self):
+        command = "printf approval-test"
+        pending = self.call_tool("termux_exec", {"command": command})
+        self.assertTrue(pending.get("permission_required"))
+        self.assertEqual(pending.get("command"), command)
+
+        approval = self.call_tool("termux_command_approve", {"command": command})
+        self.assertTrue(approval.get("approved_once"))
+
+        completed = SimpleNamespace(returncode=0, stdout="approved", stderr="")
+        with patch.object(mcp_server.subprocess, "run", return_value=completed) as run_command:
+            result = self.call_tool("termux_exec", {"command": command})
+            run_command.assert_called_once()
+        self.assertEqual(result.get("exit_code"), 0)
+        self.assertEqual(result.get("stdout"), "approved")
+
+        denied_again = self.call_tool("termux_exec", {"command": command})
+        self.assertTrue(denied_again.get("permission_required"))
 
     def test_auth_and_origin_validation(self):
         request = Request(self.url, data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}', headers={
