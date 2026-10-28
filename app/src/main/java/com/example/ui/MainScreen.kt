@@ -674,6 +674,7 @@ private fun MainChatScreen(
                 Column(Modifier.fillMaxSize().statusBarsPadding()) {
                     CodeinHeader(
                         selectedModel = selectedModel,
+                        models = availableModels,
                         onSelectModel = { selectedModel = it },
                         onNewChat = ::clearChat,
                         onHistory = { showHistory = true },
@@ -884,6 +885,7 @@ private fun MainChatScreen(
 @Composable
 private fun CodeinHeader(
     selectedModel: CodeinModel,
+    models: List<CodeinModel>,
     onSelectModel: (CodeinModel) -> Unit,
     onNewChat: () -> Unit,
     onHistory: () -> Unit,
@@ -939,8 +941,20 @@ private fun CodeinHeader(
             Box(Modifier.fillMaxWidth().padding(top = 2.dp), contentAlignment = Alignment.Center) {
                 ConnectionStatus(isConnected, connectionFailed, onRetry)
             }
-            Box(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp), contentAlignment = Alignment.Center) {
-                ModelPicker(selectedModel, availableModels, onSelectModel)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 3.dp, bottom = 2.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val zeroModel = models.firstOrNull { it.id == "zero" && it.providerId == null }
+                val heroModel = models.firstOrNull { it.id == "hero" && it.providerId == null }
+                TextButton(onClick = { zeroModel?.let(onSelectModel) }, enabled = zeroModel != null) {
+                    Text("ZERO", color = if (selectedModel.id == "zero" && selectedModel.providerId == null) NeonOrange else TextMuted, fontWeight = FontWeight.Bold)
+                }
+                TextButton(onClick = { heroModel?.let(onSelectModel) }, enabled = heroModel != null) {
+                    Text("HERO", color = if (selectedModel.id == "hero" && selectedModel.providerId == null) NeonOrange else TextMuted, fontWeight = FontWeight.Bold)
+                }
+                ModelPicker(selectedModel, models, onSelectModel)
             }
         }
     }
