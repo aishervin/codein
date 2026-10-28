@@ -87,6 +87,10 @@ def mcp_tools_catalog():
         {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. Use only for actions authorized by the user.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
         {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"credential_save","description":"Save a user-provided API credential into the private local Termux vault. Never echo the value.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}},"required":["name","value"]}},
+        {"name":"session_save","description":"Save or update a short local session summary for Agent Room continuity.","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"summary":{"type":"string"},"next_action":{"type":"string"}},"required":["id","title","summary"]}},
+        {"name":"event_record","description":"Append a brief non-secret activity event to the local Agent Room journal.","inputSchema":{"type":"object","properties":{"kind":{"type":"string"},"summary":{"type":"string"}},"required":["kind","summary"]}},
+        {"name":"state_update","description":"Update shared Agent Room task state using a partial JSON object.","inputSchema":{"type":"object","properties":{"fields":{"type":"object"}},"required":["fields"]}},
         {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}},
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}}
     ]
@@ -118,6 +122,32 @@ def dispatch_mcp_tool(name, args):
         return {"root":str(ROOT),"workspace":str(WORKSPACE),"room":room_file.read_text(encoding="utf-8") if room_file.exists() else "","state":readj(ROOT/"state.json",{}),"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file()),"events":events,"sessions":sessions,"skills":skills}
     if name=="credentials_list":
         return {"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file())}
+    if name=="credential_save":
+        name=str(args.get("name","")).strip(); value=str(args.get("value",""))
+        if not name or any(char in name for char in "/\\") or not value: raise ValueError("Credential name and value are required")
+        path=KEYS/(name+".json")
+        path.write_text(json.dumps({"name":name,"value":value,"updated_at":now()},ensure_ascii=False,indent=2)+"\\n",encoding="utf-8")
+        path.chmod(0o600); event("credential_saved",{"name":name})
+        return {"ok":True,"name":name}
+    if name=="session_save":
+        payload=dict(args)
+        sid="".join(char for char in str(payload.get("id") or int(time.time())) if char.isalnum() or char in "-_")[:80]
+        if not sid: raise ValueError("Invalid session id")
+        payload["id"]=sid; payload["updated_at"]=now()
+        path=SESSIONS/(sid+".json")
+        path.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\\n",encoding="utf-8"); path.chmod(0o600)
+        event("session_saved",{"id":sid,"title":payload.get("title","")})
+        return {"ok":True,"id":sid}
+    if name=="event_record":
+        event(str(args.get("kind","note"))[:100],{"summary":str(args.get("summary",""))[:1000]})
+        return {"ok":True}
+    if name=="state_update":
+        fields=args.get("fields") or {}
+        if not isinstance(fields,dict): raise ValueError("fields must be an object")
+        state=readj(ROOT/"state.json",{}); state.update(fields); state["last_updated"]=now()
+        path=ROOT/"state.json"; path.write_text(json.dumps(state,ensure_ascii=False,indent=2)+"\\n",encoding="utf-8"); path.chmod(0o600)
+        event("workspace_state_updated",{"keys":sorted(fields.keys())})
+        return {"ok":True,"state":state}
     if name=="provider_models_list":
         status,result=discover_provider_models(args.get("provider"),args.get("api_key"))
         if status!=200: raise RuntimeError(result.get("error","Provider model discovery failed")+(": "+result.get("detail","") if result.get("detail") else ""))
