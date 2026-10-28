@@ -83,7 +83,12 @@ config.json
 *.secret
 IGNORE
 echo
-echo "[Codein] Starting the local bridge automatically..."
+echo "[Codein] Starting the local bridge with automatic restart..."
+# Keep the Termux CPU awake while the bridge is needed; Android may otherwise
+# suspend the local server during a slow provider model lookup.
+if command -v termux-wake-lock >/dev/null 2>&1; then
+  termux-wake-lock >/dev/null 2>&1 || true
+fi
 if [ -f "$ROOT/server.pid" ]; then
   OLD_PID="$(cat "$ROOT/server.pid" 2>/dev/null || true)"
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
@@ -91,7 +96,12 @@ if [ -f "$ROOT/server.pid" ]; then
     sleep 1
   fi
 fi
-nohup python "$ROOT/server.py" > "$ROOT/logs/server.log" 2>&1 &
+nohup bash -c 'while true; do
+  python "$HOME/.codein/server.py"
+  RC=$?
+  echo "[Codein] Bridge exited with code $RC; restarting in 2 seconds."
+  sleep 2
+done' >> "$ROOT/logs/server.log" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$ROOT/server.pid"
 TOKEN="$(python - "$ROOT/config.json" <<'PY'
