@@ -317,12 +317,32 @@ private fun MainChatScreen(
     var showSettings by remember { mutableStateOf(false) }
     var showTermuxRoom by remember { mutableStateOf(false) }
     var sharedRoomContext by remember { mutableStateOf("") }
+    var termuxConnected by remember { mutableStateOf(false) }
     var pendingCredentialName by remember { mutableStateOf("") }
     var agentToolCalls by remember { mutableStateOf(0) }
     val settingsSheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val agentScope = rememberCoroutineScope()
     val termuxClient = remember(context) { TermuxBridgeClient(context) }
     val focusManager = LocalFocusManager.current
+
+    // Track the connection for the active model route; WebView page state is
+    // unrelated to whether the Termux bridge is reachable.
+    LaunchedEffect(selectedModel.providerId, termuxClient) {
+        if (selectedModel.providerId == null) {
+            termuxConnected = false
+        } else {
+            while (true) {
+                val health = runCatching { termuxClient.health() }
+                termuxConnected = health.isSuccess
+                if (health.isSuccess) {
+                    runCatching { termuxClient.roomContext() }.getOrNull()?.let {
+                        sharedRoomContext = it.toString()
+                    }
+                }
+                delay(12000)
+            }
+        }
+    }
 
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -433,6 +453,7 @@ private fun MainChatScreen(
                         }
                     }
                     .onFailure { error ->
+                        termuxConnected = false
                         if (error is com.example.termux.MissingProviderCredential) {
                             pendingCredentialName = error.credentialName
                             messages.add(ChatMessage(user = false, text = "برای استفاده از ${error.providerName} کلید API لازم است. کلید را همین‌جا در چت بفرست؛ برنامه آن را محلی در Termux ذخیره می‌کند و مقدارش را در تاریخچه نشان نمی‌دهد. فقط مقدار کلید را در پیام بعدی بفرست."))
@@ -680,12 +701,22 @@ private fun MainChatScreen(
                         onHistory = { showHistory = true },
                         onSettings = { showSettings = true },
                         onTermux = { showTermuxRoom = true },
-                        isConnected = isConnected,
-                        connectionFailed = connectionFailed,
+                        isConnected = if (selectedModel.providerId == null) isConnected else termuxConnected,
+                        connectionFailed = if (selectedModel.providerId == null) connectionFailed else !termuxConnected,
                         onRetry = {
-                            connectionFailed = false
-                            isConnected = false
-                            webView?.reload()
+                            if (selectedModel.providerId == null) {
+                                connectionFailed = false
+                                isConnected = false
+                                webView?.reload()
+                            } else {
+                                agentScope.launch {
+                                    val health = runCatching { termuxClient.health() }
+                                    termuxConnected = health.isSuccess
+                                    if (health.isSuccess) {
+                                        runCatching { termuxClient.roomContext() }.getOrNull()?.let { sharedRoomContext = it.toString() }
+                                    }
+                                }
+                            }
                         }
                     )
                     val isEmpty = messages.isEmpty() && activeAnswer.isEmpty()
@@ -824,7 +855,7 @@ private fun MainChatScreen(
     if (showTermuxRoom) {
         TermuxAgentRoomDialog(
             onDismiss = { showTermuxRoom = false },
-            onRoomContextLoaded = { sharedRoomContext = it.toString() },
+            onRoomContextLoaded = { sharedRoomContext = it.toString(); termuxConnected = true },
             onModelSelected = { model ->
                 if (availableModels.none { it.id == model.id && it.providerId == model.providerId }) availableModels.add(model)
                 selectedModel = model
@@ -946,14 +977,6 @@ private fun CodeinHeader(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val zeroModel = models.firstOrNull { it.id == "zero" && it.providerId == null }
-                val heroModel = models.firstOrNull { it.id == "hero" && it.providerId == null }
-                TextButton(onClick = { zeroModel?.let(onSelectModel) }, enabled = zeroModel != null) {
-                    Text("ZERO", color = if (selectedModel.id == "zero" && selectedModel.providerId == null) NeonOrange else TextMuted, fontWeight = FontWeight.Bold)
-                }
-                TextButton(onClick = { heroModel?.let(onSelectModel) }, enabled = heroModel != null) {
-                    Text("HERO", color = if (selectedModel.id == "hero" && selectedModel.providerId == null) NeonOrange else TextMuted, fontWeight = FontWeight.Bold)
-                }
                 ModelPicker(selectedModel, models, onSelectModel)
             }
         }
