@@ -50,6 +50,9 @@ class TermuxBridgeClient(context: Context) {
             .put("tools", toolArray)
     }
 
+    /** Lightweight MCP liveness probe for the periodic connection indicator. */
+    suspend fun ping(): JSONObject = mcpRequest("ping", JSONObject())
+
     suspend fun workspace(): JSONObject = request("GET", "/api/workspace")
 
     /** Read Agent Room through MCP tools/call, not a private REST endpoint. */
