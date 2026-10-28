@@ -70,8 +70,42 @@ config.json
 *.secret
 IGNORE
 echo
+echo "[Codein] Starting the local bridge automatically..."
+if [ -f "$ROOT/server.pid" ]; then
+  OLD_PID="$(cat "$ROOT/server.pid" 2>/dev/null || true)"
+  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+    kill "$OLD_PID" 2>/dev/null || true
+    sleep 1
+  fi
+fi
+nohup python "$ROOT/server.py" > "$ROOT/logs/server.log" 2>&1 &
+SERVER_PID=$!
+echo "$SERVER_PID" > "$ROOT/server.pid"
+TOKEN="$(python - "$ROOT/config.json" <<'PY'
+import json, sys
+from pathlib import Path
+print(json.loads(Path(sys.argv[1]).read_text())["token"])
+PY
+)"
+BRIDGE_READY=0
+for attempt in $(seq 1 20); do
+  if curl --silent --fail --max-time 1 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8765/health" >/dev/null 2>&1; then
+    BRIDGE_READY=1
+    break
+  fi
+  sleep 0.5
+done
+if [ "$BRIDGE_READY" -eq 1 ]; then
+  echo "[Codein] Bridge is running at http://127.0.0.1:8765 (PID $SERVER_PID)"
+else
+  echo "[Codein] Bridge did not start. Recent log:"
+  tail -n 40 "$ROOT/logs/server.log" || true
+  echo "[Codein] Inspect: $ROOT/logs/server.log"
+fi
+
+echo
 echo "[Codein] Workspace and documentation skills ready: $ROOT"
-echo "[Codein] Start bridge: python $ROOT/server.py"
+echo "[Codein] Bridge startup is automatic; log: $ROOT/logs/server.log"
 echo "[Codein] Keep Termux open while Codein uses it."
 
 echo
