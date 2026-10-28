@@ -82,6 +82,42 @@ def discover_provider_models(pid, api_key):
     except Exception as e:
         return 502,{"ok":False,"error":"Provider model lookup failed","error_type":type(e).__name__}
 
+def mcp_tools_catalog():
+    return [
+        {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. Use only for actions authorized by the user.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
+        {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}}
+    ]
+
+def dispatch_mcp_tool(name, args):
+    args=args if isinstance(args,dict) else {}
+    if name=="termux_exec":
+        command=str(args.get("command","")).strip()
+        timeout=max(1,min(int(args.get("timeout",120)),900))
+        if not command: raise ValueError("Command is empty")
+        event("command_started",{"command":command[:500]}); start=time.monotonic()
+        try:
+            run=subprocess.run(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),capture_output=True,text=True,timeout=timeout,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)})
+            result={"exit_code":run.returncode,"stdout":run.stdout[-100000:],"stderr":run.stderr[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
+        except subprocess.TimeoutExpired as exc:
+            result={"exit_code":124,"error":"Command timed out","stdout":str(exc.stdout or "")[-100000:],"stderr":str(exc.stderr or "")[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
+        event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
+        return result
+    if name=="agent_room_get":
+        journal=EVENTS/"journal.jsonl"
+        lines=journal.read_text(encoding="utf-8").splitlines()[-25:] if journal.exists() else []
+        sessions=[]
+        for file in sorted(SESSIONS.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True)[:5]:
+            item=readj(file,{})
+            sessions.append({"id":item.get("id"),"title":item.get("title"),"summary":str(item.get("summary",""))[-1800:],"next_action":item.get("next_action")})
+        events=[json.loads(line) for line in lines if line.strip()]
+        skills={f.stem:f.read_text(encoding="utf-8")[:10000] for f in (ROOT/"skills").glob("*.md")}
+        room_file=ROOT/"ROOM.md"
+        return {"root":str(ROOT),"workspace":str(WORKSPACE),"room":room_file.read_text(encoding="utf-8") if room_file.exists() else "","state":readj(ROOT/"state.json",{}),"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file()),"events":events,"sessions":sessions,"skills":skills}
+    if name=="credentials_list":
+        return {"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file())}
+    raise ValueError("Unknown MCP tool: "+str(name))
+
 def provider_chat(data):
     pid=str(data.get("provider","")).strip().lower()
     provider=PROVIDERS.get(pid)
@@ -240,43 +276,11 @@ class Handler(BaseHTTPRequestHandler):
             })
         if method=="ping": return self.mcp_result(request_id,{})
         if method=="tools/list":
-            return self.mcp_result(request_id,{"tools":[
-                {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. Commands may change files or perform network actions; use only for the user's task.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
-                {"name":"agent_room_get","description":"Read the shared Codein Agent Room context, workspace state, recent events, sessions, and skills. Credential names only; secret values are never returned.","inputSchema":{"type":"object","properties":{} }},
-                {"name":"credentials_list","description":"List names of locally stored credentials without revealing their values.","inputSchema":{"type":"object","properties":{} }},
-                {"name":"provider_models_list","description":"List available model IDs from a supported provider using a supplied API key. Do not store the key with this tool.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}}
-            ]})
+            return self.mcp_result(request_id,{"tools":mcp_tools_catalog()})
         if method=="tools/call":
             name=str(params.get("name","")); args=params.get("arguments") or {}
             try:
-                if name=="termux_exec":
-                    command=str(args.get("command","")).strip()
-                    timeout=max(1,min(int(args.get("timeout",120)),900))
-                    if not command: raise ValueError("Command is empty")
-                    event("command_started",{"command":command[:500]}); start=time.monotonic()
-                    try:
-                        run=subprocess.run(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),capture_output=True,text=True,timeout=timeout,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)})
-                        result={"exit_code":run.returncode,"stdout":run.stdout[-100000:],"stderr":run.stderr[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
-                    except subprocess.TimeoutExpired as e:
-                        result={"exit_code":124,"error":"Command timed out","stdout":str(e.stdout or "")[-100000:],"stderr":str(e.stderr or "")[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
-                    event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
-                elif name=="agent_room_get":
-                    journal=EVENTS/"journal.jsonl"; lines=journal.read_text(encoding="utf-8").splitlines()[-25:] if journal.exists() else []
-                    sessions=[]
-                    for file in sorted(SESSIONS.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True)[:5]:
-                        item=readj(file,{})
-                        sessions.append({"id":item.get("id"),"title":item.get("title"),"summary":str(item.get("summary",""))[-1800:],"next_action":item.get("next_action")})
-                    events=[json.loads(line) for line in lines if line.strip()]
-                    skills={f.stem:f.read_text(encoding="utf-8")[:10000] for f in (ROOT/"skills").glob("*.md")}
-                    room_file=ROOT/"ROOM.md"
-                    result={"root":str(ROOT),"workspace":str(WORKSPACE),"room":room_file.read_text(encoding="utf-8") if room_file.exists() else "","state":readj(ROOT/"state.json",{}),"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file()),"events":events,"sessions":sessions,"skills":skills}
-                elif name=="credentials_list":
-                    result={"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file())}
-                elif name=="provider_models_list":
-                    status,result=discover_provider_models(args.get("provider"),args.get("api_key"))
-                    if status!=200: raise RuntimeError(result.get("error","Provider model discovery failed"))
-                else:
-                    return self.mcp_error(request_id,-32602,"Unknown tool: "+name)
+                result=dispatch_mcp_tool(name,args)
                 return self.mcp_result(request_id,{"content":[{"type":"text","text":json.dumps(result,ensure_ascii=False)}],"isError":False})
             except Exception as exc:
                 return self.mcp_result(request_id,{"content":[{"type":"text","text":str(exc)[:1500]}],"isError":True})
