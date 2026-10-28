@@ -103,7 +103,7 @@ def mcp_tools_catalog():
         {"name":"composio_configure","description":"Save a Composio Connect consumer key in the private Termux credential vault. Never print the key.","inputSchema":{"type":"object","properties":{"consumer_api_key":{"type":"string","description":"Composio Connect consumer key (ck_...)"}}, "required":["consumer_api_key"]}},
         {"name":"composio_tools_refresh","description":"Discover tools available from Composio Connect after apps have been connected.","inputSchema":{"type":"object","properties":{}}},
         {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. This tool requires explicit user approval for each command.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
-        {"name":"termux_command_approve","description":"Record one-time user approval for the exact shell command shown in the app permission prompt. Do not call unless the user explicitly approved that exact command.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Exact command approved by the user"}},"required":["command"]}},
+        {"name":"termux_command_approve","description":"Record user approval for the exact shell command shown in the app permission prompt. Do not call unless the user explicitly approved it.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Exact command approved by the user"},"always":{"type":"boolean","default":false,"description":"Persist approval for this exact command string"}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
         {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}},
         {"name":"credential_save","description":"Save a user-provided API credential into the private local Termux vault. Never echo the value.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"value":{"type":"string"}},"required":["name","value"]}},
@@ -140,6 +140,15 @@ def dispatch_mcp_tool(name, args):
     if name=="termux_command_approve":
         command=str(args.get("command","")).strip()
         if not command: raise ValueError("Command is empty")
+        if bool(args.get("always",False)):
+            policy_path=PERMISSIONS/"always.json"
+            policy=readj(policy_path,{"commands":[]})
+            commands=set(str(item) for item in policy.get("commands",[]) if isinstance(item,str))
+            commands.add(command)
+            policy_path.write_text(json.dumps({"commands":sorted(commands),"updated_at":now()},ensure_ascii=False,indent=2)+"\\n",encoding="utf-8")
+            policy_path.chmod(0o600)
+            event("command_always_allowed",{"command":command[:500]})
+            return {"ok":True,"approved_always":True}
         approval=PERMISSIONS/(hashlib.sha256(command.encode("utf-8")).hexdigest()+".json")
         approval.write_text(json.dumps({"command":command,"approved_at":now()},ensure_ascii=False),encoding="utf-8")
         approval.chmod(0o600)
@@ -149,13 +158,16 @@ def dispatch_mcp_tool(name, args):
         command=str(args.get("command","")).strip()
         timeout=max(1,min(int(args.get("timeout",120)),900))
         if not command: raise ValueError("Command is empty")
+        policy=readj(PERMISSIONS/"always.json",{"commands":[]})
+        always_allowed=command in policy.get("commands",[])
         approval=PERMISSIONS/(hashlib.sha256(command.encode("utf-8")).hexdigest()+".json")
         approved=readj(approval,{})
-        if approved.get("command") != command:
+        if not always_allowed and approved.get("command") != command:
             event("command_permission_requested",{"command":command[:500]})
             return {"permission_required":True,"command":command}
-        try: approval.unlink()
-        except OSError: pass
+        if not always_allowed:
+            try: approval.unlink()
+            except OSError: pass
         event("command_started",{"command":command[:500]}); start=time.monotonic()
         try:
             run=subprocess.run(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),capture_output=True,text=True,timeout=timeout,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)})
