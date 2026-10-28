@@ -1783,10 +1783,11 @@ private fun CodeinHistoryDialog(
 private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (JSONObject) -> Unit, onModelSelected: (CodeinModel) -> Unit) {
     val context = LocalContext.current
     val client = remember(context) { TermuxBridgeClient(context) }
+    val integrationPrefs = remember(context) { context.getSharedPreferences("codein_integrations", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
     var baseUrl by remember { mutableStateOf(client.baseUrl) }
     var token by remember { mutableStateOf(client.bearerToken) }
-    var keyName by remember { mutableStateOf("cloudflare_api_token") }
+    var keyName by remember(integrationPrefs) { mutableStateOf(integrationPrefs.getString("service_key_name", "cloudflare_api_token") ?: "cloudflare_api_token") }
     var keyValue by remember { mutableStateOf("") }
     var savedKeys by remember { mutableStateOf(emptyList<String>()) }
     var status by remember { mutableStateOf("اتصال ترموکس هنوز برقرار نشده") }
@@ -1926,7 +1927,6 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     Text(skillNames.joinToString("  ·  "), color = TextMuted, fontSize = 11.sp)
                 }
                 Text("مدل‌های هوش مصنوعی", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                val integrationPrefs = remember(context) { context.getSharedPreferences("codein_integrations", Context.MODE_PRIVATE) }
                 var aiProviderId by remember(integrationPrefs) { mutableStateOf(integrationPrefs.getString("ai_provider", "gemini") ?: "gemini") }
                 var aiProviderMenuExpanded by remember { mutableStateOf(false) }
                 var aiModelMenuExpanded by remember { mutableStateOf(false) }
@@ -2097,6 +2097,11 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                 val serviceKeyOptions = listOf(
                     "GitHub · token" to "github_token",
                     "Cloudflare · API token" to "cloudflare_api_token",
+                    "GitLab · token" to "gitlab_token",
+                    "Railway · API token" to "railway_api_token",
+                    "Vercel · token" to "vercel_token",
+                    "Supabase · access token" to "supabase_access_token",
+                    "Hugging Face · token" to "huggingface_token",
                     "Telegram · bot token" to "telegram_bot_token"
                 )
                 Box {
@@ -2108,15 +2113,19 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         serviceKeyOptions.forEach { (label, value) ->
                             DropdownMenuItem(text = { Text(label) }, onClick = {
                                 keyName = value
+                                integrationPrefs.edit().putString("service_key_name", value).apply()
                                 serviceMenuExpanded = false
                             })
                         }
                     }
                 }
+                if (savedKeys.contains(keyName)) {
+                    Text("توکن ${serviceKeyOptions.firstOrNull { it.second == keyName }?.first ?: keyName} قبلاً ذخیره شده است؛ لازم نیست دوباره واردش کنی.", color = Color(0xFF4DDB8A), fontSize = 11.sp)
+                }
                 OutlinedTextField(
                     value = serviceTokenValue,
                     onValueChange = { serviceTokenValue = it },
-                    label = { Text("توکن سرویس") },
+                    label = { Text(if (savedKeys.contains(keyName)) "توکن جدید (اختیاری برای جایگزینی)" else "توکن سرویس") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
