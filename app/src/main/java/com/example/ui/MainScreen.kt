@@ -1758,7 +1758,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         val installCommand = "curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash"
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(ClipData.newPlainText("Codein Termux install", installCommand))
-                        output = "دستور نصب در کلیپ‌بورد کپی شد. در Termux آن را Paste و اجرا کن:\n\n" + installCommand + "\n\nبعد از نصب، سرور محلی را با این دستور اجرا کن:\npython ~/.codein/server.py\n\nتوکن اتصال را از ~/.codein/config.json بردار و فقط یک‌بار در همین صفحه وارد کن. آدرس مدل‌های Gemini، GPT، DeepSeek و سرویس‌های دیگر از قبل تنظیم شده؛ لازم نیست endpoint آن‌ها را دستی وارد کنی."
+                        output = "دستور نصب در کلیپ‌بورد کپی شد. در Termux آن را Paste و اجرا کن:\n\n" + installCommand + "\n\nنصب‌کننده خودش سرویس MCP محلی را در پس‌زمینه اجرا می‌کند؛ دستور python ~/.codein/server.py را دوباره اجرا نکن. توکن اتصال در خروجی نصب‌کننده نمایش داده می‌شود؛ همان را اینجا وارد کن. اگر اتصال برقرار نشد، لاگ را با tail -n 60 ~/.codein/logs/server.log بررسی کن. مدل‌ها از API سرویس و کلید خودت استعلام می‌شوند."
                     }) { Text("کپی دستور نصب") }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
