@@ -20,7 +20,8 @@ jobs:
       - name: Validate Termux scripts
         run: |
           bash -n termux/codein-bootstrap.sh
-          python3 -m py_compile termux/server.py termux/with-key.py
+          python3 -m py_compile termux/server.py termux/with-key.py termux/test_mcp.py
+          python3 -m unittest termux/test_mcp.py
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
