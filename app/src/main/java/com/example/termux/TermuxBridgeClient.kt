@@ -95,8 +95,8 @@ class TermuxBridgeClient(context: Context) {
     }
 
     suspend fun credentialNames(): List<String> {
-        val result = request("GET", "/api/keys")
-        val array = result.optJSONArray("keys") ?: JSONArray()
+        val result = mcpTool("credentials_list", JSONObject())
+        val array = result.optJSONArray("credentials") ?: JSONArray()
         return (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
     }
 
@@ -108,7 +108,7 @@ class TermuxBridgeClient(context: Context) {
     suspend fun saveCredential(name: String, value: String): JSONObject {
         requireValidName(name)
         require(value.isNotBlank()) { "Credential value cannot be empty" }
-        return request("POST", "/api/keys", JSONObject().put("name", name).put("value", value))
+        return mcpTool("credential_save", JSONObject().put("name", name).put("value", value))
     }
 
     /** Execute a local shell command using the standard MCP tools/call method. */
@@ -119,18 +119,18 @@ class TermuxBridgeClient(context: Context) {
             .put("timeout", timeoutSeconds.coerceIn(1, 900)), timeoutSeconds.coerceIn(1, 900))
     }
 
-    suspend fun saveSession(id: String, title: String, summary: String, nextAction: String = ""): JSONObject {
-        return request("POST", "/api/sessions", JSONObject()
+    suspend fun saveSession(id: String, title: String, summary: String, nextAction: String = ""): JSONObject =
+        mcpTool("session_save", JSONObject()
             .put("id", id)
             .put("title", title)
             .put("summary", summary)
             .put("next_action", nextAction))
-    }
 
     suspend fun recordEvent(kind: String, summary: String): JSONObject =
-        request("POST", "/api/events", JSONObject().put("kind", kind).put("data", JSONObject().put("summary", summary)))
+        mcpTool("event_record", JSONObject().put("kind", kind).put("summary", summary))
 
-    suspend fun updateState(fields: JSONObject): JSONObject = request("POST", "/api/state", fields)
+    suspend fun updateState(fields: JSONObject): JSONObject =
+        mcpTool("state_update", JSONObject().put("fields", fields))
 
     private var mcpRequestId = 0
 
