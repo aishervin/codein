@@ -10,7 +10,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Authenticated SSE endpoint streams OpenAI-compatible, Gemini, and Anthropic providers; old `/api/chat` and MCP route remain.
 - [x] Android client parses SSE frames, streams tokens to active chat, shows collapsible Agent trace, falls back for old server/unsupported providers, and cancels on stop/clear/history switch.
 - [x] Cancellation disconnects the HTTP socket immediately so the server can stop upstream streaming.
-- [x] SSE framing/auth and OpenAI tool-delta tests added; all seven Termux tests pass; Python syntax check passes.
+- [x] SSE framing/auth and OpenAI/Gemini/Anthropic stream tests added; all eleven Termux tests pass; Python syntax check passes.
 - [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
 - [x] SSE Kotlin client/UI is committed but not compiled (build prohibited); old-server streaming fallback remains.
 - [x] Gemini `streamGenerateContent` and Anthropic Messages SSE are parsed natively, including tool calls and the existing command approval gate.
@@ -72,7 +72,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Commit each coherent chunk on `main`, English scoped message plus `[skip ci]`; verify pushes do not start Actions.
 
 ## Recommended order
-1. Add Gemini/Anthropic native streaming and tests.
+1. Consider real provider network/timeout/disconnect tests if credentials and external calls are explicitly in scope.
 2. Review Kotlin changes again if they are modified; compile only if the user later permits it.
 3. Finish Composio review only if its OAuth flow is part of the next requested scope.
 4. Update handoffs and commit small chunks with `[skip ci]`; never build/release.
@@ -94,5 +94,6 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `3cd42a056afc8310c5cab70d4b1b5c409149ed63` — Agent Room tabs, masked credentials, report view, and design doc; exact SHA has 0 workflow runs.
 - `72101067515e7afe3e1a5ee4656ff49aa4b3e42a` — updated project checklist after tab cleanup; exact SHA has 0 workflow runs.
 - `0541e8a809997c8b4781a5feed8c8a1b43d90c6f` — finalized Agent Room handoff status; exact SHA has 0 workflow runs.
+- `de130efc3f228ed3afdb3cac50362cc15db47af3` — native Gemini/Anthropic SSE plus parser, request and approval-gate tests; exact SHA has 0 workflow runs.
 - `python3 -m unittest termux/test_mcp.py` — 11 tests passed, including Gemini/Anthropic streaming and approval gate; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
 - `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.
