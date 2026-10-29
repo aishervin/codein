@@ -333,6 +333,9 @@ private fun MainChatScreen(
     var connectionFailed by remember { mutableStateOf(false) }
     var isStreaming by remember { mutableStateOf(false) }
     var activeAnswer by remember { mutableStateOf("") }
+    var agentRequestGeneration by remember { mutableStateOf(0) }
+    var liveAgentEvents by remember { mutableStateOf(emptyList<String>()) }
+    var activeAgentJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var rawModelAnswer by remember { mutableStateOf("") }
     var suppressDirectiveOutput by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
@@ -440,8 +443,12 @@ private fun MainChatScreen(
 
     fun clearChat() {
         archiveCurrentChat()
+        agentRequestGeneration++
+        activeAgentJob?.cancel()
+        activeAgentJob = null
         messages.clear()
         activeAnswer = ""
+        liveAgentEvents = emptyList()
         input = ""
         attachment = null
         isStreaming = false
@@ -452,6 +459,14 @@ private fun MainChatScreen(
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Codein", text))
         android.widget.Toast.makeText(context, "Copied", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    fun stopAgentStream() {
+        agentRequestGeneration++
+        activeAgentJob?.cancel()
+        activeAgentJob = null
+        activeAnswer = ""
+        isStreaming = false
     }
 
     fun downloadText(content: String, suggestedName: String) {
@@ -475,8 +490,10 @@ private fun MainChatScreen(
             )
         }
         requestMessages.put(JSONObject().put("role", "user").put("content", requestText))
+        val requestGeneration = ++agentRequestGeneration
         messages.add(ChatMessage(user = true, text = displayText, attachmentName = attachmentName, requestText = requestText))
         activeAnswer = ""
+        liveAgentEvents = emptyList()
         rawModelAnswer = ""
         suppressDirectiveOutput = false
         isStreaming = true
@@ -498,10 +515,25 @@ private fun MainChatScreen(
                 messages.add(ChatMessage(user = false, text = "برای استفاده از ${selectedModel.suffix}، یک‌بار از آیکون >_ پل Termux را راه‌اندازی و متصل کن. بعد از اتصال، درخواست مستقیم به سرویس انتخاب‌شده فرستاده می‌شود."))
                 return
             }
-            agentScope.launch {
-                runCatching { termuxClient.chat(selectedProviderId, selectedModelId, requestMessages, effectiveSystemPrompt) }
+            activeAgentJob = agentScope.launch {
+                runCatching {
+                    termuxClient.chatStream(selectedProviderId, selectedModelId, requestMessages, effectiveSystemPrompt) { event ->
+                        if (requestGeneration == agentRequestGeneration) {
+                            when (event.optString("type")) {
+                                "token" -> activeAnswer += event.optString("text")
+                                "status" -> liveAgentEvents = (liveAgentEvents + "در حال اتصال به سرویس مدل…").takeLast(60)
+                                "tool_call" -> liveAgentEvents = (liveAgentEvents + "اجرای ابزار: " + event.optString("name")).takeLast(60)
+                                "tool_result" -> liveAgentEvents = (liveAgentEvents + "پاسخ ابزار: " + event.optString("summary").take(220)).takeLast(60)
+                                "approval_required" -> liveAgentEvents = (liveAgentEvents + "فرمان برای تأیید کاربر متوقف شد.").takeLast(60)
+                            }
+                        }
+                    }
+                }
                     .onSuccess { result ->
+                        if (requestGeneration != agentRequestGeneration) return@onSuccess
+                        activeAgentJob = null
                         if (result.optBoolean("permission_required")) {
+                            activeAnswer = ""
                             val command = result.optString("command")
                             messages.add(ChatMessage(
                                 user = false,
@@ -513,6 +545,7 @@ private fun MainChatScreen(
                             return@onSuccess
                         }
                         val answer = result.optString("content")
+                        activeAnswer = ""
                         val reasoningMatch = Regex("""<(?:think|analysis|reasoning)>\s*([\s\S]*?)\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).find(answer)
                         val visibleAnswer = Regex("""<(?:think|analysis|reasoning)>\s*[\s\S]*?\s*</(?:think|analysis|reasoning)>""", RegexOption.IGNORE_CASE).replace(answer, "").trim()
                         messages.add(ChatMessage(
@@ -528,6 +561,10 @@ private fun MainChatScreen(
                         }
                     }
                     .onFailure { error ->
+                        if (requestGeneration != agentRequestGeneration) return@onFailure
+                        activeAgentJob = null
+                        activeAnswer = ""
+                        liveAgentEvents = emptyList()
                         // Provider API errors/timeouts do not prove the local MCP bridge is down.
                         // The independent MCP health probe owns connection state.
                         if (error is com.example.termux.MissingProviderCredential) {
@@ -890,18 +927,21 @@ private fun MainChatScreen(
                                     ProcessingIndicator()
                                 }
                             }
-                             if (activeAnswer.isNotEmpty()) {
-                                 item {
-                                     ChatBubble(
-                                         message = ChatMessage(false, activeAnswer),
-                                         onCopy = ::copyToClipboard,
-                                         onRetry = ::retryMessage,
-                                         onDownload = ::downloadText,
-                                         onApproveCommand = { message, always -> handleTermuxPermission(message, if (always) "always" else "once") },
-                                         onDenyCommand = { handleTermuxPermission(it, "reject") }
-                                     )
-                                 }
-                             }
+                            if (activeAnswer.isNotEmpty()) {
+                                item {
+                                    ChatBubble(
+                                        message = ChatMessage(false, activeAnswer),
+                                        onCopy = ::copyToClipboard,
+                                        onRetry = ::retryMessage,
+                                        onDownload = ::downloadText,
+                                        onApproveCommand = { message, always -> handleTermuxPermission(message, if (always) "always" else "once") },
+                                        onDenyCommand = { handleTermuxPermission(it, "reject") }
+                                    )
+                                }
+                            }
+                            if (selectedModel.providerId != null && liveAgentEvents.isNotEmpty()) {
+                                item { AgentLivePanel(liveAgentEvents, if (isStreaming) ::stopAgentStream else null) }
+                            }
                          }
                          val historyFade = MaterialTheme.colorScheme.background
                         Box(
@@ -993,9 +1033,13 @@ private fun MainChatScreen(
             onDismiss = { showHistory = false },
             onOpen = { entry ->
                 archiveCurrentChat()
+                agentRequestGeneration++
+                activeAgentJob?.cancel()
+                activeAgentJob = null
                 messages.clear()
                 messages.addAll(decodeChatMessages(entry.optJSONArray("messages") ?: JSONArray()))
                 activeAnswer = ""
+                liveAgentEvents = emptyList()
                 attachment = null
                 input = ""
                 isStreaming = false

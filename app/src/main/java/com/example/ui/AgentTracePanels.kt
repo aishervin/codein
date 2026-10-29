@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -36,6 +37,37 @@ import com.example.ui.theme.AccentRed
 import com.example.ui.theme.NeonOrange
 import com.example.ui.theme.NeonOrangeSoft
 import com.example.ui.theme.TextMuted
+
+@Composable
+internal fun AgentLivePanel(events: List<String>, onStop: (() -> Unit)? = null) {
+    var expanded by remember { mutableStateOf(false) }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .72f),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().animateContentSize()
+    ) {
+        Column(Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("⌁  گزارش زندهٔ Agent · ${events.size}", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                if (onStop != null) {
+                    TextButton(onClick = onStop) { Text("توقف", color = AccentRed, fontSize = 11.sp) }
+                }
+                Text(if (expanded) "−" else "+", color = TextMuted, fontSize = 14.sp)
+            }
+            if (expanded) {
+                Spacer(Modifier.height(7.dp))
+                Column(Modifier.height(150.dp).verticalScroll(rememberScrollState())) {
+                    events.takeLast(40).forEach { line ->
+                        Text(line, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 16.sp)
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 internal fun ReasoningTracePanel(reasoning: String) {

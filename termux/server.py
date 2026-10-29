@@ -251,10 +251,12 @@ def dispatch_mcp_tool(name, args):
         return {"ok":False,"error":"Invalid action"}
     raise ValueError("Unknown MCP tool: "+str(name))
 
-def read_openai_stream(response, emit):
+def read_openai_stream(response, emit, deadline):
     content=[]
     calls={}
     for raw_line in response:
+        if time.monotonic()>deadline:
+            raise TimeoutError("Provider chat exceeded its total time limit")
         line=raw_line.decode("utf-8",errors="replace").strip()
         if not line.startswith("data:"):
             continue
@@ -302,6 +304,7 @@ def provider_chat(data, emit=None):
         if content: clean.append({"role":role,"content":content[:50000]})
     system=str(data.get("system",""))[:30000]
     timeout=max(10,min(int(data.get("timeout",120)),180))
+    deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",300)),300)) if emit else None
     if emit and provider["kind"]!="openai":
         return 501,{"ok":False,"error":"Streaming is not yet supported for this provider","provider":pid}
     # Provider-native model calls receive only local action tools. Avoid recursion
@@ -377,11 +380,14 @@ def provider_chat(data, emit=None):
             url=provider["base_url"].rstrip("/")+"/chat/completions"
             headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key}
             for _ in range(9):
+                if emit and time.monotonic()>deadline:
+                    return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 payload={"model":model,"messages":msgs,"stream":bool(emit),"tools":tools,"tool_choice":"auto"}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
-                with urlopen(request,timeout=timeout) as response:
+                request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
+                with urlopen(request,timeout=request_timeout) as response:
                     if emit:
-                        message=read_openai_stream(response,emit)
+                        message=read_openai_stream(response,emit,deadline)
                     else:
                         raw=json.loads(response.read(3_000_000).decode())
                         choices=raw.get("choices") or []
@@ -402,7 +408,14 @@ def provider_chat(data, emit=None):
                     if isinstance(result,dict) and result.get("permission_required"):
                         if emit: emit({"type":"approval_required","command":str(result.get("command",""))})
                         return 200,{"ok":True,"permission_required":True,"command":str(result.get("command",""))}
-                    if emit: emit({"type":"tool_result","id":str(call.get("id","")),"name":name,"summary":str(result)[:1000]})
+                    if emit:
+                        if isinstance(result,dict) and "exit_code" in result:
+                            summary="Command finished with exit code "+str(result.get("exit_code"))
+                        elif isinstance(result,dict) and result.get("error"):
+                            summary="Tool returned an error"
+                        else:
+                            summary="Tool completed"
+                        emit({"type":"tool_result","id":str(call.get("id","")),"name":name,"summary":summary})
                     msgs.append({"role":"tool","tool_call_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         if not answer: return 502,{"ok":False,"error":"Provider returned an empty response","provider":pid,"model":model}
@@ -416,7 +429,7 @@ def provider_chat(data, emit=None):
         event("provider_chat_error",{"provider":pid,"model":model,"status":exc.code})
         return 502,{"ok":False,"error":"Provider HTTP "+str(exc.code),"provider":pid,"model":model,"detail":detail[:3000]}
     except (URLError,TimeoutError):
-        return 502,{"ok":False,"error":"Provider connection failed. Check network access and try again."}
+        return 502,{"ok":False,"error":"Provider connection failed or exceeded the time limit. Check network access and try again."}
     except Exception as exc:
         return 502,{"ok":False,"error":"Provider request failed","error_type":type(exc).__name__}
 
@@ -540,7 +553,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_sse({"type":"status","status":"starting"})
                 status,result=provider_chat(data,self.send_sse)
                 if status!=200:
-                    self.send_sse({"type":"error","error":result.get("error","Chat failed"),"detail":result.get("detail","")})
+                    self.send_sse({"type":"error","error":result.get("error","Chat failed"),"detail":result.get("detail",""),"credential_name":result.get("credential_name",""),"provider_name":result.get("provider_name","")})
             except (BrokenPipeError,ConnectionResetError):
                 return
             except Exception as exc:

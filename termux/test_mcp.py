@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Smoke tests for the local MCP JSON-RPC transport and tool routing."""
 import json
+import io
 import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -97,6 +99,21 @@ class McpTransportTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as error:
             urlopen(request,timeout=3)
         self.assertEqual(error.exception.code,401)
+
+    def test_openai_stream_collects_text_and_tool_call_deltas(self):
+        chunks=[
+            {"choices":[{"delta":{"content":"hello "}}]},
+            {"choices":[{"delta":{"content":"world","tool_calls":[{"index":0,"id":"call-1","function":{"name":"termux_","arguments":"{"}}]}}]},
+            {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"exec","arguments":"\"command\":"}}]}}]},
+            {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"pwd\"}"}}]}}]},
+        ]
+        raw=b"".join(("data: "+json.dumps(chunk)+"\n\n").encode() for chunk in chunks)+b"data: [DONE]\n\n"
+        emitted=[]
+        message=mcp_server.read_openai_stream(io.BytesIO(raw),emitted.append,time.monotonic()+5)
+        self.assertEqual(message["content"],"hello world")
+        self.assertEqual(message["tool_calls"][0]["function"]["name"],"termux_exec")
+        self.assertEqual(json.loads(message["tool_calls"][0]["function"]["arguments"]),{"command":"pwd"})
+        self.assertEqual([item["text"] for item in emitted], ["hello ","world"])
 
     def test_initialize_and_tool_catalog(self):
         status, response = self.rpc("initialize", {

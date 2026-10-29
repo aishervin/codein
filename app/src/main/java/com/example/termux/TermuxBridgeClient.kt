@@ -1,7 +1,10 @@
 package com.example.termux
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -59,6 +62,8 @@ class TermuxBridgeClient(context: Context) {
                 consecutivePingFailures = 0
                 pingHasSucceeded = true
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
             consecutivePingFailures++
             if (pingHasSucceeded && consecutivePingFailures < 3) {
@@ -127,6 +132,93 @@ class TermuxBridgeClient(context: Context) {
         }
         return result
     }
+
+    /** Stream provider events; providers without native SSE support fall back to the legacy route. */
+    suspend fun chatStream(
+        provider: String,
+        model: String,
+        messages: JSONArray,
+        system: String,
+        onEvent: suspend (JSONObject) -> Unit
+    ): JSONObject {
+        return try {
+            withContext(Dispatchers.IO) {
+                check(bearerToken.isNotBlank()) { "Termux bridge token is missing." }
+                val connection = (URL(baseUrl + "/api/chat/stream").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 8_000
+                    readTimeout = 190_000
+                    setRequestProperty("Authorization", "Bearer " + bearerToken)
+                    setRequestProperty("Accept", "text/event-stream")
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    doOutput = true
+                }
+                val requestJob = currentCoroutineContext()[Job]
+                val cancellation = requestJob?.invokeOnCompletion { connection.disconnect() }
+                try {
+                    val payload = JSONObject()
+                        .put("provider", provider)
+                        .put("model", model)
+                        .put("messages", messages)
+                        .put("system", system)
+                        .put("timeout", 120)
+                    connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                    val status = connection.responseCode
+                    if (status !in 200..299) {
+                        if (status == 404) throw StreamingNotSupported()
+                        val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                        throw IllegalStateException("Termux stream HTTP $status: " + detail.take(700))
+                    }
+                    val answer = StringBuilder()
+                    var completed = false
+                    var permissionCommand: String? = null
+                    connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                        val dataLines = mutableListOf<String>()
+                        suspend fun dispatchFrame() {
+                            if (dataLines.isEmpty()) return
+                            val event = runCatching { JSONObject(dataLines.joinToString("\n")) }.getOrNull()
+                            dataLines.clear()
+                            if (event == null) return
+                            when (event.optString("type")) {
+                                "token" -> answer.append(event.optString("text"))
+                                "done" -> completed = true
+                                "approval_required" -> permissionCommand = event.optString("command")
+                                "error" -> {
+                                    val message = event.optString("error", "Provider streaming failed")
+                                    if (message.contains("not yet supported for this provider")) throw StreamingNotSupported()
+                                    if (message == "missing_api_key") {
+                                        throw MissingProviderCredential(event.optString("credential_name"), event.optString("provider_name"))
+                                    }
+                                    throw IllegalStateException(message + event.optString("detail").takeIf(String::isNotBlank)?.let { ": " + it.take(500) }.orEmpty())
+                                }
+                            }
+                            withContext(Dispatchers.Main) { onEvent(event) }
+                        }
+                        while (!completed && permissionCommand == null) {
+                            val line = reader.readLine() ?: break
+                            when {
+                                line.isEmpty() -> dispatchFrame()
+                                line.startsWith("data:") -> dataLines += line.removePrefix("data:").trimStart()
+                            }
+                        }
+                        if (dataLines.isNotEmpty()) dispatchFrame()
+                    }
+                    permissionCommand?.let {
+                        return@withContext JSONObject().put("ok", true).put("permission_required", true).put("command", it)
+                    }
+                    check(completed) { "Termux stream ended before completion." }
+                    JSONObject().put("ok", true).put("provider", provider).put("model", model).put("content", answer.toString())
+                } finally {
+                    cancellation?.dispose()
+                    connection.disconnect()
+                }
+            }
+        } catch (_: StreamingNotSupported) {
+            chat(provider, model, messages, system)
+        }
+    }
+
+    private class StreamingNotSupported : IllegalStateException()
 
     suspend fun credentialNames(): List<String> {
         val result = mcpTool("credentials_list", JSONObject())
