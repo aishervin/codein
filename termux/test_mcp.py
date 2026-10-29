@@ -68,7 +68,7 @@ class McpTransportTests(unittest.TestCase):
         return json.loads(result["content"][0]["text"])
 
     def test_chat_stream_sends_flushed_sse_frames(self):
-        def fake_chat(data, emit):
+        def fake_chat(data, emit, cancel=None):
             emit({"type":"token","text":"hello"})
             emit({"type":"done"})
             return 200,{"ok":True}
@@ -99,6 +99,100 @@ class McpTransportTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as error:
             urlopen(request,timeout=3)
         self.assertEqual(error.exception.code,401)
+
+    def test_chat_cancel_endpoint_cancels_active_and_pending_request_ids(self):
+        active_id="active-cancel-test"
+        active=mcp_server.register_stream(active_id)
+        request=Request(self.url.replace("/mcp","/api/chat/cancel"),data=json.dumps({"request_id":active_id}).encode(),headers={
+            "Authorization":"Bearer mcp-test-token",
+            "Content-Type":"application/json"
+        },method="POST")
+        with urlopen(request,timeout=3) as response:
+            result=json.loads(response.read().decode())
+        self.assertTrue(result["cancelled"])
+        self.assertTrue(active.cancelled.is_set())
+        mcp_server.unregister_stream(active_id,active)
+
+        pending_id="pending-cancel-test"
+        request=Request(self.url.replace("/mcp","/api/chat/cancel"),data=json.dumps({"request_id":pending_id}).encode(),headers={
+            "Authorization":"Bearer mcp-test-token",
+            "Content-Type":"application/json"
+        },method="POST")
+        with urlopen(request,timeout=3) as response:
+            result=json.loads(response.read().decode())
+        self.assertFalse(result["cancelled"])
+        pending=mcp_server.register_stream(pending_id)
+        self.assertTrue(pending.cancelled.is_set())
+        mcp_server.unregister_stream(pending_id,pending)
+
+    def test_stream_cancel_endpoint_stops_the_registered_chat(self):
+        request_id="stream-cancel-integration"
+        started=threading.Event()
+        finished=threading.Event()
+
+        def fake_chat(_data,_emit,cancel):
+            started.set()
+            cancel.cancelled.wait(3)
+            finished.set()
+            return 499,{"ok":False,"error":"Request cancelled"}
+
+        with patch.object(mcp_server,"provider_chat",side_effect=fake_chat):
+            request=Request(self.url.replace("/mcp","/api/chat/stream"),data=json.dumps({"request_id":request_id}).encode(),headers={
+                "Authorization":"Bearer mcp-test-token",
+                "Content-Type":"application/json"
+            },method="POST")
+            stream_response=urlopen(request,timeout=3)
+            starting_frame=stream_response.readline().decode()+stream_response.readline().decode()
+            self.assertTrue(started.wait(2))
+            request=Request(self.url.replace("/mcp","/api/chat/cancel"),data=json.dumps({"request_id":request_id}).encode(),headers={
+                "Authorization":"Bearer mcp-test-token",
+                "Content-Type":"application/json"
+            },method="POST")
+            with urlopen(request,timeout=3) as cancel_response:
+                cancel_result=json.loads(cancel_response.read().decode())
+            self.assertTrue(finished.wait(2))
+            stream_response.close()
+        self.assertTrue(cancel_result["cancelled"])
+        self.assertIn('"status":"starting"',starting_frame)
+        for _ in range(20):
+            with mcp_server.ACTIVE_STREAMS_LOCK:
+                if request_id not in mcp_server.ACTIVE_STREAMS: break
+            time.sleep(0.05)
+        with mcp_server.ACTIVE_STREAMS_LOCK:
+            self.assertNotIn(request_id,mcp_server.ACTIVE_STREAMS)
+
+    def test_cancel_closes_active_provider_stream(self):
+        started=threading.Event()
+        control=mcp_server.StreamControl()
+
+        class BlockingResponse:
+            def __init__(self): self.closed=threading.Event()
+            def __iter__(self):
+                started.set()
+                self.closed.wait(3)
+                raise OSError("response closed")
+            def close(self): self.closed.set()
+
+        response=BlockingResponse()
+        result=[]
+        def call_provider():
+            result.append(mcp_server.provider_chat(
+                {"provider":"openai","model":"test-model","messages":[{"role":"user","content":"hello"}]},
+                lambda _event:None,
+                control
+            ))
+
+        with patch.object(mcp_server,"readj",return_value={"value":"test-api-key"}), \
+                patch.object(mcp_server,"mcp_tools_catalog",return_value=[]), \
+                patch.object(mcp_server,"urlopen",return_value=response):
+            worker=threading.Thread(target=call_provider)
+            worker.start()
+            self.assertTrue(started.wait(2))
+            control.cancel()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result[0][0],499)
+        self.assertTrue(response.closed.is_set())
 
     def test_openai_stream_collects_text_and_tool_call_deltas(self):
         chunks=[
@@ -169,6 +263,55 @@ class McpTransportTests(unittest.TestCase):
             self.assertIn(":streamGenerateContent?alt=sse&key=test-api-key" if provider=="gemini" else "/messages",requests[0][0].full_url)
             self.assertEqual([event.get("stage") for event in events if event.get("type")=="status"], ["waiting_provider","provider_response"])
             self.assertIn({"type":"token","text":expected_text},events)
+
+    def test_gemini_tool_schema_removes_unsupported_json_schema_fields(self):
+        response=b'data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}\n\n'
+        schema={
+            "$schema":"https://json-schema.org/draft/2020-12/schema",
+            "title":"Remote tool input",
+            "type":"object",
+            "additionalProperties":False,
+            "properties":{
+                "value":{
+                    "type":"array",
+                    "default":[],
+                    "items":{
+                        "$schema":"https://json-schema.org/draft/2020-12/schema",
+                        "type":"object",
+                        "additionalProperties":False,
+                        "properties":{"name":{"type":"string","description":"Name","examples":["sample"]}},
+                        "required":["name"]
+                    }
+                },
+                "unsupported":{"default":"ignored"}
+            },
+            "required":["value","unsupported"]
+        }
+        tool={"name":"remote_tool","description":"Test remote tool","inputSchema":schema}
+        with patch.object(mcp_server,"readj",return_value={"value":"test-api-key"}), \
+                patch.object(mcp_server,"mcp_tools_catalog",return_value=[tool]), \
+                patch.object(mcp_server,"urlopen",return_value=io.BytesIO(response)) as urlopen_mock:
+            status,result=mcp_server.provider_chat({"provider":"gemini","model":"test-model","messages":[{"role":"user","content":"hello"}]},lambda _event:None)
+        self.assertEqual(status,200)
+        self.assertEqual(result["content"],"ok")
+        payload=json.loads(urlopen_mock.call_args.args[0].data)
+        parameters=payload["tools"][0]["functionDeclarations"][0]["parameters"]
+        self.assertEqual(parameters,{
+            "type":"object",
+            "properties":{"value":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","description":"Name"}},"required":["name"]}}},
+            "required":["value"]
+        })
+
+    def test_provider_503_is_reported_as_transient_without_raw_json(self):
+        body=json.dumps({"error":{"code":503,"message":"This model is currently experiencing high demand."}}).encode()
+        error=HTTPError("https://provider.invalid/generate",503,"busy",{},io.BytesIO(body))
+        with patch.object(mcp_server,"readj",return_value={"value":"test-api-key"}), \
+                patch.object(mcp_server,"urlopen",side_effect=error):
+            status,result=mcp_server.provider_chat({"provider":"gemini","model":"test-model","messages":[{"role":"user","content":"hello"}]})
+        self.assertEqual(status,502)
+        self.assertEqual(result["error"],"Provider is temporarily busy (HTTP 503)")
+        self.assertEqual(result["detail"],"This model is currently experiencing high demand.")
+        self.assertNotIn('"error"',result["detail"])
 
     def test_native_provider_tool_calls_keep_command_approval_gate(self):
         anthropic_events=[

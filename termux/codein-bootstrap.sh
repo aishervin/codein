@@ -16,8 +16,9 @@ fetch() {
 fetch "termux/server.py" "$ROOT/server.py"
 fetch "termux/composio_connect.py" "$ROOT/composio_connect.py"
 fetch "termux/with-key.py" "$ROOT/bin/codein-with-key"
+fetch "termux/codein-bridge" "$ROOT/bin/codein-bridge"
 fetch "termux/codein-opencode" "$ROOT/bin/codein-opencode"
-chmod 700 "$ROOT/server.py" "$ROOT/bin/codein-with-key" "$ROOT/bin/codein-opencode"
+chmod 700 "$ROOT/server.py" "$ROOT/bin/codein-with-key" "$ROOT/bin/codein-bridge" "$ROOT/bin/codein-opencode"
 fetch "termux/skills/integrations.md" "$ROOT/skills/integrations.md"
 fetch "termux/skills/github-cloudflare.md" "$ROOT/skills/github-cloudflare.md"
 fetch "termux/skills/telegram.md" "$ROOT/skills/telegram.md"
@@ -74,62 +75,18 @@ config.json
 *.secret
 IGNORE
 echo
-echo "[Codein] Starting the local bridge with automatic restart..."
-# Keep the Termux CPU awake while the bridge is needed; Android may otherwise
-# suspend the local server during a slow provider model lookup.
-if command -v termux-wake-lock >/dev/null 2>&1; then
-  termux-wake-lock >/dev/null 2>&1 || true
-fi
-if [ -f "$ROOT/server-child.pid" ]; then
-  OLD_CHILD_PID="$(cat "$ROOT/server-child.pid" 2>/dev/null || true)"
-  if [ -n "$OLD_CHILD_PID" ] && kill -0 "$OLD_CHILD_PID" 2>/dev/null; then
-    kill "$OLD_CHILD_PID" 2>/dev/null || true
-  fi
-fi
-if [ -f "$ROOT/server.pid" ]; then
-  OLD_PID="$(cat "$ROOT/server.pid" 2>/dev/null || true)"
-  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    kill "$OLD_PID" 2>/dev/null || true
-    sleep 1
-  fi
-fi
-nohup bash -c 'while true; do
-  python "$HOME/.codein/server.py" &
-  CHILD_PID=$!
-  echo "$CHILD_PID" > "$HOME/.codein/server-child.pid"
-  wait "$CHILD_PID"
-  RC=$?
-  rm -f "$HOME/.codein/server-child.pid"
-  echo "[Codein] Bridge exited with code $RC; restarting in 2 seconds."
-  sleep 2
-done' >> "$ROOT/logs/server.log" 2>&1 &
-SERVER_PID=$!
-echo "$SERVER_PID" > "$ROOT/server.pid"
+echo "[Codein] Starting the local bridge..."
+"$ROOT/bin/codein-bridge" restart
 TOKEN="$(python - "$ROOT/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 print(json.loads(Path(sys.argv[1]).read_text())["token"])
 PY
 )"
-BRIDGE_READY=0
-for attempt in $(seq 1 20); do
-  if curl --silent --fail --max-time 1 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8765/health" >/dev/null 2>&1; then
-    BRIDGE_READY=1
-    break
-  fi
-  sleep 0.5
-done
-if [ "$BRIDGE_READY" -eq 1 ]; then
-  echo "[Codein] Bridge is running at http://127.0.0.1:8765 (PID $SERVER_PID)"
-else
-  echo "[Codein] Bridge did not start. Recent log:"
-  tail -n 40 "$ROOT/logs/server.log" || true
-  echo "[Codein] Inspect: $ROOT/logs/server.log"
-fi
-
 echo
 echo "[Codein] Workspace and documentation skills ready: $ROOT"
-echo "[Codein] Bridge startup is automatic; log: $ROOT/logs/server.log"
+echo "[Codein] Bridge controls: $ROOT/bin/codein-bridge {start|stop|restart|status|logs}"
+echo "[Codein] Bridge log: $ROOT/logs/server.log"
 echo "[Codein] Keep Termux open while Codein uses it."
 echo
 echo "[Codein] Preparing OpenCode agent API (no browser UI)..."

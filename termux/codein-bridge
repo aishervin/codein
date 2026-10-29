@@ -1,0 +1,94 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Explicit lifecycle controls for the local Codein Termux bridge.
+set -euo pipefail
+ROOT="$HOME/.codein"
+PID_FILES=("$ROOT/server.pid" "$ROOT/server-child.pid")
+LOG="$ROOT/logs/server.log"
+CONFIG="$ROOT/config.json"
+
+if [ ! -f "$CONFIG" ]; then
+  echo "Codein is not initialized. Run the Codein Termux installer first." >&2
+  exit 1
+fi
+readarray -t SETTINGS < <(python - "$CONFIG" <<'PY'
+import json, sys
+from pathlib import Path
+config = json.loads(Path(sys.argv[1]).read_text())
+print(int(config.get("port", 8765)))
+print(str(config.get("token", "")))
+PY
+)
+PORT="${SETTINGS[0]}"
+TOKEN="${SETTINGS[1]:-}"
+
+matches_server() {
+  local pid="$1" args
+  args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  [[ "$args" == *"$ROOT/server.py"* ]]
+}
+
+probe() {
+  [ -n "$TOKEN" ] && curl --silent --fail --max-time 2 \
+    -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/health" >/dev/null 2>&1
+}
+
+stop_existing() {
+  local pids=() pid file
+  for file in "${PID_FILES[@]}"; do
+    [ -f "$file" ] || continue
+    pid="$(<"$file")"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && matches_server "$pid"; then
+      pids+=("$pid")
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${pids[@]}"; do
+    for _ in $(seq 1 20); do
+      matches_server "$pid" || break
+      sleep 0.25
+    done
+    if matches_server "$pid"; then kill -9 "$pid" 2>/dev/null || true; fi
+  done
+  rm -f "${PID_FILES[@]}"
+}
+
+start_bridge() {
+  if probe; then
+    echo "[Codein] Bridge is already running at http://127.0.0.1:$PORT"
+    return 0
+  fi
+  stop_existing
+  if command -v termux-wake-lock >/dev/null 2>&1; then termux-wake-lock >/dev/null 2>&1 || true; fi
+  nohup python "$ROOT/server.py" >>"$LOG" 2>&1 </dev/null &
+  local pid=$!
+  echo "$pid" > "$ROOT/server.pid"
+  chmod 600 "$ROOT/server.pid"
+  for _ in $(seq 1 30); do
+    if probe; then
+      echo "[Codein] Bridge ready at http://127.0.0.1:$PORT (PID $pid)"
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.5
+  done
+  echo "[Codein] Bridge failed to start. Recent log:" >&2
+  tail -n 40 "$LOG" >&2 || true
+  stop_existing
+  return 1
+}
+
+case "${1:-status}" in
+  start) start_bridge ;;
+  stop)
+    stop_existing
+    if command -v termux-wake-unlock >/dev/null 2>&1; then termux-wake-unlock >/dev/null 2>&1 || true; fi
+    echo "[Codein] Bridge stopped."
+    ;;
+  restart) stop_existing; start_bridge ;;
+  status)
+    if probe; then echo "[Codein] Bridge is running at http://127.0.0.1:$PORT"
+    else echo "[Codein] Bridge is stopped at http://127.0.0.1:$PORT"; fi
+    ;;
+  logs) tail -n 80 "$LOG" 2>/dev/null || echo "[Codein] No bridge log yet." ;;
+  *) echo "Usage: codein-bridge {start|stop|restart|status|logs}" >&2; exit 2 ;;
+esac

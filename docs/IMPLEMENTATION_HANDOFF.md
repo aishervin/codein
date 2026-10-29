@@ -8,9 +8,14 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Baseline was clean `main`, HEAD `0bc77f2` (`Build main artifacts as Codein 1.0.9`).
 - [x] Heartbeat now uses a 2-second MCP ping and suppresses two transient errors after first successful ping.
 - [x] Authenticated SSE endpoint streams OpenAI-compatible, Gemini, and Anthropic providers; old `/api/chat` and MCP route remain.
+- [x] Gemini tool schemas are recursively restricted to fields supported by its FunctionDeclaration schema; provider 429/503 responses are summarized instead of returning raw JSON.
+- [x] Streaming chat requests have unique IDs; Stop posts an authenticated cancel request, which closes the active upstream response and prevents further provider/tool-loop iterations.
+- [x] Termux bridge lifecycle is explicit (`start|stop|restart|status|logs`); bootstrap no longer installs an endless auto-restart loop.
+- [x] OpenCode controls delegate to the Termux-compatible manager and stop only its managed `opencode serve` process. App controls use the authenticated MCP tool directly, not shell command text; the provider agent cannot autonomously manage OpenCode. OpenCode remains optional and does not silently replace the selected Codein chat provider.
+- [ ] Re-run the updated Termux bootstrap on-device, then verify Gemini/Composio requests, Stop during a pending response, and bridge stop/start.
 - [x] Android client parses SSE frames, streams tokens to active chat, shows collapsible Agent trace, falls back for old server/unsupported providers, and cancels on stop/clear/history switch.
-- [x] Cancellation disconnects the HTTP socket immediately so the server can stop upstream streaming.
-- [x] SSE framing/auth and OpenAI/Gemini/Anthropic stream tests added; all eleven Termux tests pass; Python syntax check passes.
+- [x] Cancellation disconnects the app socket and sends the request ID to the server; the server closes the provider response and unwinds the tool loop.
+- [x] SSE framing/auth, provider parsing, cancellation, Gemini schema and transient 503 tests added; all sixteen Termux tests pass; Python syntax check passes.
 - [x] Live panel now shows colored waiting/receiving/tool/approval/completed stages and elapsed time; list auto-scroll includes the stage panel.
 - [x] When provider output is pending, the live stage remains on “waiting for model” while a timer advances; stage changes reflect actual server response and tool events.
 - [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
@@ -32,6 +37,10 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `app/src/main/java/com/example/termux/TermuxBridgeClient.kt`: MCP and REST client; `ping()` already calls lightweight MCP `ping`.
 - `termux/server.py`: providers, legacy non-streaming chat, provider-native SSE readers, command approval/execute, MCP and REST handlers.
 - `termux/codein-bootstrap.sh`: downloads server from `main` and restarts it.
+- `termux/codein-bridge`: explicit Termux bridge lifecycle manager; old bridge PID files are handled during upgrade.
+- `termux/codein-opencode`: starts/stops only its managed OpenCode API process; it does not stop arbitrary matching processes.
+- `gemini_schema()` in `termux/server.py` removes unsupported JSON Schema draft fields from nested Gemini tool declarations, including Composio schemas.
+- User screenshots show Gemini HTTP 400 errors for `$schema`/`additionalProperties`, plus a separate upstream HTTP 503 high-demand response. The Termux indicator is green in those screenshots; they confirm the bridge reached Gemini but do not prove it disconnected.
 - `app/src/main/java/com/example/ui/AgentTracePanels.kt`: colored processing stage/timer panel; `app/src/main/java/com/example/ui/MainScreen.kt` maps SSE stages and keeps the panel in view.
 - `app/src/main/java/com/example/ui/components/CodeinSheets.kt`, `termux/composio_connect.py`, `.github/workflows/*.yml`, `docs/`.
 - Connection check is MCP `ping` every 12 seconds, not `initialize` + `tools/list`. Heartbeat change uses a 2-second timeout and suppresses two failures only after the first successful ping.
@@ -51,16 +60,17 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Add native streaming for Gemini and Anthropic; preserve text and provider tool-call structures across stream chunks.
 - [x] Emit truthful waiting-for-provider and response-connected stages; no synthetic provider progress is shown while a request is pending.
 - [x] Retain provider tool loop and exact-command approval gate; proposed commands still stop at `approval_required`.
-- [x] Tool loop is capped at 9 iterations; streaming total time is capped at 300 seconds; broken client writes unwind and close the upstream response.
+- [x] Tool loop is capped at 9 iterations; streaming total time is capped at 300 seconds; broken client writes and explicit cancel requests unwind and close the upstream response.
 - [x] Add stdlib tests for SSE framing/auth, OpenAI/Gemini/Anthropic text and tool streams, native provider request shape and the command approval gate. Re-run after future server edits.
 
 ### 3. Android streaming and connection stability
-- [x] Implement SSE line/event parsing (partial network chunks, UTF-8, multiple data lines) and cancelable HTTP request in `TermuxBridgeClient`.
+- [x] Implement SSE line/event parsing (partial network chunks, UTF-8, multiple data lines) and cancelable HTTP request in `TermuxBridgeClient`; cancellation sends a server-side request ID.
 - [x] Connect token events to active chat UI; generation guard prevents late events updating a cleared/switched chat.
 - [x] Add collapsed live trace panel and stop control; existing permission panel handles approve/reject.
 - [x] Color event stages, show elapsed processing time, retain final/error/cancelled states, and auto-scroll the current stage into view.
 - [x] Add failure hysteresis and short ping; ping is already lightweight, so do not add tools/list polling.
 - [x] Handle 401, missing provider key, timeout and old Termux server; old server falls back to MCP chat.
+- [x] OpenCode service controls use a managed PID file and do not use broad `pkill`; there is not yet automatic chat-provider fallback to OpenCode.
 
 ### 4. Agent Room UI / integration
 - [x] Audit controls and callbacks before reorganizing `TermuxAgentRoomDialog`.
@@ -70,21 +80,22 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [ ] Do not remove `COMPOSIO_API_KEY` from builds until a tested migration/replacement preserves existing users. No secret migration by assumption.
 
 ### 5. Docs, verification, commits
-- [x] Update Agent Room design doc; bootstrap already fetches server from `main`, so no installer change is required.
-- [x] Run the Termux unit suite after the latest changes (11 tests pass); local Kotlin compilation was attempted but this workspace has no Java runtime.
+- [x] Update bootstrap to install the bridge lifecycle manager and start it without an endless supervisor loop.
+- [x] Run the updated Termux suite (16 tests), Python syntax checks, all three Termux shell syntax checks and `git diff --check`; local Kotlin compilation is unavailable because Java/Gradle are absent.
 - [x] Review diff for approval bypass, unintended Hero/Zero/Dolphin changes, identifier/signing changes and secrets.
 - [x] Update this checklist and `outputs/codein-handoff.md` with facts, tests and commit hashes.
 - [x] Commit each coherent chunk on `main`, English scoped message plus `[skip ci]`; verify pushes do not start Actions.
 
 ## Recommended order
-1. Consider real provider network/timeout/disconnect tests if credentials and external calls are explicitly in scope.
-2. Verify the v1.1.0 APK on a device and smoke-test the WebView Termux approval/result loop.
-3. Finish Composio review only if its OAuth flow is part of a later requested scope.
+1. Test the updated bootstrap on-device: bridge `status`, Stop a pending chat, then bridge `restart` and `stop`.
+2. Test Gemini once directly and once with Composio tools; HTTP 429/503 is a provider-capacity issue, not evidence the bridge died.
+3. Verify optional OpenCode install/start/status/stop from Agent Room. Chat stays on the chosen Codein provider; no automatic model/provider switch occurs.
+4. If the connection indicator still drops, capture `~/.codein/logs/server.log` and compare authenticated `/health` results with app status.
 
 ## Acceptance criteria
 - Provider tokens appear incrementally; old endpoints still work.
 - A transient heartbeat failure does not flap status; idle bridge remains responsive.
-- Stopping cancels streaming; command execution still requires explicit approval.
+- Stopping cancels the provider response at the bridge; command execution still requires explicit approval.
 - Hero/Zero/Dolphin and application identifiers remain unchanged.
 - Lightweight tests pass; signed v1.1.0 release workflow succeeds and its APK is published; commits and workflow run are recorded below.
 
@@ -101,6 +112,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `de130efc3f228ed3afdb3cac50362cc15db47af3` — native Gemini/Anthropic SSE plus parser, request and approval-gate tests; exact SHA has 0 workflow runs.
 - `8159b3ead9393899330d890c390dccd0658ae2ae` — colored live processing stages, elapsed timer, auto-scroll and server provider-stage events; exact SHA has 0 workflow runs. Kotlin remains uncompiled by request.
 - `bd5a87f57d870e6c9833590bb01144e5d228ed10` — structured WebView Termux handoff, v1.1.0 release settings and workflow hardening; `[skip ci]`.
-- `python3 -B -m unittest termux/test_mcp.py` — 11 tests passed, including provider stage events; `python3 -B -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
-- `bash -n termux/codein-bootstrap.sh` — passed. Local `:app:compileDebugKotlin` could not start because Java is unavailable in this workspace. The authorized GitHub Android Release workflow compiled and built the signed APK, restored the configured signing key, uploaded the artifact, and published v1.1.0.
+- Earlier baseline: `python3 -B -m unittest termux/test_mcp.py` — 13 tests passed; `python3 -B -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
+- Current uncommitted changes add cancellation tests and bridge/OpenCode lifecycle controls; `python3 -B -m unittest termux/test_mcp.py` — 16 tests passed; compile() syntax checks, `bash -n termux/codein-bootstrap.sh termux/codein-bridge termux/codein-opencode`, and `git diff --check` passed. Local Kotlin compilation is unavailable because Java/Gradle are absent.
+- The authorized GitHub Android Release workflow previously built the signed APK and published v1.1.0. These new changes have not been committed or published yet.
 - Android Release run `40909550882` — success on `bd5a87f57d870e6c9833590bb01144e5d228ed10`. Published `Codein-1.1.0-Universal.apk` (10,946,816 bytes); release: https://github.com/aishervin/codein/releases/tag/v1.1.0 . `COMPOSIO_API_KEY` remains passed into the build; secret values were not accessed.

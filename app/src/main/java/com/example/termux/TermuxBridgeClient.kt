@@ -11,6 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 
 /**
  * Client for the user's own Termux Agent Room.
@@ -155,10 +156,37 @@ class TermuxBridgeClient(context: Context) {
                     setRequestProperty("Content-Type", "application/json; charset=utf-8")
                     doOutput = true
                 }
+                val requestId = UUID.randomUUID().toString()
                 val requestJob = currentCoroutineContext()[Job]
-                val cancellation = requestJob?.invokeOnCompletion(onCancelling = true) { connection.disconnect() }
+                val cancellation = requestJob?.invokeOnCompletion(onCancelling = true) { cause ->
+                    connection.disconnect()
+                    if (cause is CancellationException) {
+                        Thread {
+                            val cancelConnection = runCatching {
+                                (URL(baseUrl + "/api/chat/cancel").openConnection() as HttpURLConnection).apply {
+                                    requestMethod = "POST"
+                                    connectTimeout = 2_000
+                                    readTimeout = 2_000
+                                    setRequestProperty("Authorization", "Bearer " + bearerToken)
+                                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                                    doOutput = true
+                                }
+                            }.getOrNull()
+                            try {
+                                cancelConnection?.outputStream?.use {
+                                    it.write(JSONObject().put("request_id", requestId).toString().toByteArray(Charsets.UTF_8))
+                                }
+                                cancelConnection?.responseCode
+                            } catch (_: Exception) {
+                            } finally {
+                                cancelConnection?.disconnect()
+                            }
+                        }.apply { isDaemon = true; start() }
+                    }
+                }
                 try {
                     val payload = JSONObject()
+                        .put("request_id", requestId)
                         .put("provider", provider)
                         .put("model", model)
                         .put("messages", messages)
@@ -253,6 +281,16 @@ class TermuxBridgeClient(context: Context) {
         return mcpTool("termux_exec", JSONObject()
             .put("command", command)
             .put("timeout", timeoutSeconds.coerceIn(1, 900)), timeoutSeconds.coerceIn(1, 900))
+    }
+
+    /** Manage the optional OpenCode service from an explicit Agent Room control. */
+    suspend fun manageOpenCode(action: String): JSONObject {
+        require(action in setOf("install", "start", "status", "restart", "stop")) { "Invalid OpenCode action" }
+        val result = mcpTool("opencode_manage", JSONObject().put("action", action), 300)
+        check(result.optBoolean("ok")) {
+            result.optString("error").ifBlank { result.optString("status").ifBlank { "OpenCode action failed" } }
+        }
+        return result
     }
 
     suspend fun saveSession(id: String, title: String, summary: String, nextAction: String = ""): JSONObject =

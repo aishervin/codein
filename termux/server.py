@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Codein local Termux bridge. Python standard library only."""
-import hashlib, json, os, subprocess, time
+import hashlib, json, os, subprocess, threading, time, uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +17,78 @@ PORT=int(CONFIG.get("port",8765))
 WORKSPACE=Path(CONFIG.get("workspace",str(ROOT/"workspace"))).expanduser()
 KEYS=ROOT/"keys"; EVENTS=ROOT/"events"; SESSIONS=ROOT/"sessions"; PERMISSIONS=ROOT/"permissions"
 for d in (WORKSPACE,KEYS,EVENTS,SESSIONS,PERMISSIONS,ROOT/"agents",ROOT/"skills",ROOT/"tools",ROOT/"logs"): d.mkdir(parents=True,exist_ok=True)
+
+class RequestCancelled(Exception): pass
+
+ACTIVE_STREAMS={}
+PENDING_CANCELLATIONS={}
+ACTIVE_STREAMS_LOCK=threading.Lock()
+
+class StreamControl:
+    def __init__(self):
+        self.cancelled=threading.Event()
+        self.lock=threading.Lock()
+        self.response=None
+
+    def cancel(self):
+        self.cancelled.set()
+        with self.lock:
+            response=self.response
+        if response is not None:
+            try: response.close()
+            except Exception: pass
+
+    def check(self):
+        if self.cancelled.is_set(): raise RequestCancelled()
+
+    def attach(self,response):
+        with self.lock:
+            if self.cancelled.is_set():
+                try: response.close()
+                except Exception: pass
+                raise RequestCancelled()
+            self.response=response
+
+    def detach(self,response):
+        with self.lock:
+            if self.response is response: self.response=None
+
+@contextmanager
+def tracked_response(control,response):
+    if control: control.attach(response)
+    try: yield response
+    finally:
+        if control: control.detach(response)
+        try: response.close()
+        except Exception: pass
+
+def register_stream(request_id):
+    with ACTIVE_STREAMS_LOCK:
+        current=time.monotonic()
+        for key,expires in list(PENDING_CANCELLATIONS.items()):
+            if expires<=current: PENDING_CANCELLATIONS.pop(key,None)
+        control=StreamControl()
+        if PENDING_CANCELLATIONS.pop(request_id,None): control.cancelled.set()
+        ACTIVE_STREAMS[request_id]=control
+        return control
+
+def cancel_stream(request_id):
+    with ACTIVE_STREAMS_LOCK:
+        current=time.monotonic()
+        for key,expires in list(PENDING_CANCELLATIONS.items()):
+            if expires<=current: PENDING_CANCELLATIONS.pop(key,None)
+        control=ACTIVE_STREAMS.get(request_id)
+        if control is None:
+            while len(PENDING_CANCELLATIONS)>=256:
+                PENDING_CANCELLATIONS.pop(next(iter(PENDING_CANCELLATIONS)))
+            PENDING_CANCELLATIONS[request_id]=time.monotonic()+60
+            return False
+    control.cancel()
+    return True
+
+def unregister_stream(request_id,control):
+    with ACTIVE_STREAMS_LOCK:
+        if ACTIVE_STREAMS.get(request_id) is control: ACTIVE_STREAMS.pop(request_id,None)
 
 def now(): return datetime.now(timezone.utc).isoformat()
 PROVIDERS = {
@@ -113,7 +186,7 @@ def mcp_tools_catalog():
         {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}},
         {"name":"provider_models_saved_list","description":"Query a provider model catalog using the API key already saved in the local credential vault.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)}},"required":["provider"]}},
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
-        {"name":"opencode_manage","description":"Manage OpenCode agent engine: install, run, or check status.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","status","stop"]},"args":{"type":"string"}},"required":["action"]}}
+        {"name":"opencode_manage","description":"Manage the optional local OpenCode API: install/start, check status, restart, or stop. This does not replace the selected Codein chat provider.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","start","status","restart","stop"]}},"required":["action"]}}
     ]
     return local_tools + composio_tool_catalog()
 
@@ -234,21 +307,13 @@ def dispatch_mcp_tool(name, args):
         return result
     if name=="opencode_manage":
         action=str(args.get("action","status"))
-        if action=="install":
-            run=subprocess.run(["/data/data/com.termux/files/usr/bin/npm","install","-g","opencode-ai"],capture_output=True,text=True)
-            return {"ok":run.returncode==0,"status":"Installation finished","stdout":run.stdout,"stderr":run.stderr}
-        if action=="run":
-            # Start OpenCode server in background
-            proc=subprocess.Popen(["opencode","serve","--port","8766"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
-            return {"ok":True,"status":"OpenCode server started (PID "+str(proc.pid)+")"}
-        if action=="status":
-            # Check if opencode process is running
-            run=subprocess.run(["pgrep","-f","opencode"],capture_output=True,text=True)
-            return {"ok":True,"status":"Running" if run.returncode==0 else "Stopped"}
-        if action=="stop":
-            subprocess.run(["pkill","-f","opencode"])
-            return {"ok":True,"status":"OpenCode server stopped"}
-        return {"ok":False,"error":"Invalid action"}
+        if action not in ("install","run","start","status","restart","stop"):
+            return {"ok":False,"error":"Invalid action"}
+        manager=ROOT/"bin"/"codein-opencode"
+        if not manager.is_file(): return {"ok":False,"error":"OpenCode manager is missing. Re-run the Codein Termux installer."}
+        manager_action="start" if action in ("install","run") else action
+        run=subprocess.run([str(manager),manager_action],capture_output=True,text=True,timeout=180)
+        return {"ok":run.returncode==0,"action":action,"status":run.stdout.strip()[-2000:],"error":run.stderr.strip()[-2000:]}
     raise ValueError("Unknown MCP tool: "+str(name))
 
 def read_openai_stream(response, emit, deadline):
@@ -389,7 +454,38 @@ def read_anthropic_stream(response, emit, deadline):
         message["tool_calls"]=[{"id":call.get("id",""),"type":"function","function":{"name":call.get("name",""),"arguments":json.dumps(call.get("input") or {},ensure_ascii=False)}} for call in calls]
     return message
 
-def provider_chat(data, emit=None):
+GEMINI_SCHEMA_FIELDS={
+    "type","format","description","nullable","enum","items","maxItems","minItems",
+    "properties","required","minProperties","maxProperties","minimum","maximum",
+    "minLength","maxLength","pattern","anyOf","propertyOrdering"
+}
+
+def gemini_schema(schema):
+    if not isinstance(schema,dict): return {"type":"object","properties":{}}
+    result={key:value for key,value in schema.items() if key in GEMINI_SCHEMA_FIELDS and key not in ("items","properties","required","anyOf")}
+    if isinstance(schema.get("items"),dict):
+        item=gemini_schema(schema["items"])
+        if item: result["items"]=item
+    if isinstance(schema.get("properties"),dict):
+        properties={}
+        for name,value in schema["properties"].items():
+            cleaned=gemini_schema(value)
+            if cleaned: properties[name]=cleaned
+        result["properties"]=properties
+    if isinstance(schema.get("required"),list):
+        properties=result.get("properties")
+        required=[name for name in schema["required"] if isinstance(name,str) and (not isinstance(properties,dict) or name in properties)]
+        if required: result["required"]=required
+    if isinstance(schema.get("anyOf"),list):
+        variants=[gemini_schema(item) for item in schema["anyOf"]]
+        variants=[item for item in variants if item]
+        if variants: result["anyOf"]=variants
+    if "type" not in result:
+        if "properties" in result: result["type"]="object"
+        elif "items" in result: result["type"]="array"
+    return result
+
+def provider_chat(data, emit=None, cancel=None):
     pid=str(data.get("provider","")).strip().lower()
     provider=PROVIDERS.get(pid)
     if not provider: return 400,{"ok":False,"error":"Unknown provider","providers":list(PROVIDERS)}
@@ -411,25 +507,27 @@ def provider_chat(data, emit=None):
     deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",300)),300)) if emit else None
     # Provider-native model calls receive only local action tools. Avoid recursion
     # and don't ask the model to invent API keys for provider discovery.
-    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve")]
+    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve","opencode_manage")]
     try:
+        if cancel: cancel.check()
         if provider["kind"]=="gemini":
             contents=[]
             for item in clean:
                 if item["role"]=="system": system += "\n"+item["content"]; continue
                 contents.append({"role":"model" if item["role"]=="assistant" else "user","parts":[{"text":item["content"]}]})
-            function_declarations=[{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]} for tool in tool_catalog]
+            function_declarations=[{"name":tool["name"],"description":tool["description"],"parameters":gemini_schema(tool.get("inputSchema"))} for tool in tool_catalog]
             method=":streamGenerateContent?alt=sse&key=" if emit else ":generateContent?key="
             url=provider["base_url"]+"/models/"+quote(model,safe="")+method+quote(api_key,safe="")
             headers={"Content-Type":"application/json"}
             for attempt in range(9):
+                if cancel: cancel.check()
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
                 payload={"contents":contents,"generationConfig":{"temperature":0.3},"tools":[{"functionDeclarations":function_declarations}]}
                 if system: payload["systemInstruction"]={"parts":[{"text":system}]}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with urlopen(request,timeout=request_timeout) as response:
+                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_gemini_stream(response,emit,deadline)
@@ -448,6 +546,7 @@ def provider_chat(data, emit=None):
                 contents.append(model_content)
                 tool_responses=[]
                 for call in calls[:12]:
+                    if cancel: cancel.check()
                     tool_name=str(call.get("name",""))
                     arguments=call.get("args") or {}
                     if emit: emit({"type":"tool_call","name":tool_name})
@@ -469,13 +568,14 @@ def provider_chat(data, emit=None):
             url=provider["base_url"]+"/messages"
             headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"}
             for attempt in range(9):
+                if cancel: cancel.check()
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
                 payload={"model":model,"max_tokens":4096,"messages":msgs,"tools":tools,"stream":bool(emit)}
                 if system_parts: payload["system"]="\n\n".join(system_parts)
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with urlopen(request,timeout=request_timeout) as response:
+                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_anthropic_stream(response,emit,deadline)
@@ -490,6 +590,7 @@ def provider_chat(data, emit=None):
                 msgs.append({"role":"assistant","content":blocks})
                 results=[]
                 for call in tool_uses[:12]:
+                    if cancel: cancel.check()
                     if emit: emit({"type":"tool_call","id":str(call.get("id","")),"name":str(call.get("name",""))})
                     try: result=dispatch_mcp_tool(str(call.get("name","")),call.get("input") or {})
                     except Exception as exc: result={"error":str(exc)[:1500]}
@@ -508,13 +609,14 @@ def provider_chat(data, emit=None):
             url=provider["base_url"].rstrip("/")+"/chat/completions"
             headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key}
             for attempt in range(9):
+                if cancel: cancel.check()
                 if emit and time.monotonic()>deadline:
                     return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
                 payload={"model":model,"messages":msgs,"stream":bool(emit),"tools":tools,"tool_choice":"auto"}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with urlopen(request,timeout=request_timeout) as response:
+                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_openai_stream(response,emit,deadline)
@@ -528,6 +630,7 @@ def provider_chat(data, emit=None):
                     break
                 msgs.append(message)
                 for call in calls[:12]:
+                    if cancel: cancel.check()
                     function=call.get("function") or {}
                     name=str(function.get("name",""))
                     if emit: emit({"type":"tool_call","id":str(call.get("id","")),"name":name})
@@ -552,15 +655,26 @@ def provider_chat(data, emit=None):
         event("provider_chat_completed",{"provider":pid,"model":model})
         if emit: emit({"type":"done","provider":pid,"model":model})
         return 200,{"ok":True,"provider":pid,"model":model,"content":answer}
+    except RequestCancelled:
+        return 499,{"ok":False,"error":"Request cancelled"}
     except HTTPError as exc:
-        detail=""
-        try: detail=exc.read(12000).decode(errors="replace")
+        raw_detail=""
+        try: raw_detail=exc.read(12000).decode(errors="replace")
         except Exception: pass
+        detail=raw_detail
+        try:
+            parsed=json.loads(raw_detail)
+            provider_error=parsed.get("error",{}) if isinstance(parsed,dict) else {}
+            if isinstance(provider_error,dict): detail=str(provider_error.get("message") or provider_error.get("status") or raw_detail)
+        except (TypeError,ValueError): pass
         event("provider_chat_error",{"provider":pid,"model":model,"status":exc.code})
-        return 502,{"ok":False,"error":"Provider HTTP "+str(exc.code),"provider":pid,"model":model,"detail":detail[:3000]}
+        error="Provider is temporarily busy (HTTP "+str(exc.code)+")" if exc.code in (429,503) else "Provider HTTP "+str(exc.code)
+        return 502,{"ok":False,"error":error,"provider":pid,"model":model,"detail":detail[:3000]}
     except (URLError,TimeoutError):
+        if cancel and cancel.cancelled.is_set(): return 499,{"ok":False,"error":"Request cancelled"}
         return 502,{"ok":False,"error":"Provider connection failed or exceeded the time limit. Check network access and try again."}
     except Exception as exc:
+        if cancel and cancel.cancelled.is_set(): return 499,{"ok":False,"error":"Request cancelled"}
         return 502,{"ok":False,"error":"Provider request failed","error_type":type(exc).__name__}
 
 def readj(p, fallback):
@@ -671,7 +785,16 @@ class Handler(BaseHTTPRequestHandler):
         p=urlparse(self.path).path
         try: data=self.body()
         except Exception as e: return self.sendj(400,{"ok":False,"error":"Invalid JSON","detail":str(e)})
+        if p=="/api/chat/cancel":
+            request_id=str(data.get("request_id","")).strip()
+            if not request_id or len(request_id)>128 or any(not (char.isalnum() or char in "-_") for char in request_id):
+                return self.sendj(400,{"ok":False,"error":"Invalid request_id"})
+            return self.sendj(200,{"ok":True,"cancelled":cancel_stream(request_id)})
         if p=="/api/chat/stream":
+            request_id=str(data.get("request_id","")).strip() or uuid.uuid4().hex
+            if len(request_id)>128 or any(not (char.isalnum() or char in "-_") for char in request_id):
+                return self.sendj(400,{"ok":False,"error":"Invalid request_id"})
+            control=register_stream(request_id)
             self.send_response(200)
             self.send_header("Content-Type","text/event-stream; charset=utf-8")
             self.send_header("Cache-Control","no-cache, no-transform")
@@ -679,16 +802,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection","keep-alive")
             self.send_header("Access-Control-Allow-Origin","*")
             self.end_headers()
+            def emit_sse(payload):
+                control.check()
+                self.send_sse(payload)
             try:
-                self.send_sse({"type":"status","status":"starting"})
-                status,result=provider_chat(data,self.send_sse)
-                if status!=200:
-                    self.send_sse({"type":"error","error":result.get("error","Chat failed"),"detail":result.get("detail",""),"credential_name":result.get("credential_name",""),"provider_name":result.get("provider_name","")})
+                emit_sse({"type":"status","status":"starting"})
+                status,result=provider_chat(data,emit_sse,control)
+                if status!=200 and status!=499:
+                    emit_sse({"type":"error","error":result.get("error","Chat failed"),"detail":result.get("detail",""),"credential_name":result.get("credential_name",""),"provider_name":result.get("provider_name","")})
+            except RequestCancelled:
+                return
             except (BrokenPipeError,ConnectionResetError):
                 return
             except Exception as exc:
-                try: self.send_sse({"type":"error","error":"Streaming failed","detail":str(exc)[:500]})
+                try: emit_sse({"type":"error","error":"Streaming failed","detail":str(exc)[:500]})
                 except (BrokenPipeError,ConnectionResetError): pass
+                except RequestCancelled: pass
+            finally:
+                unregister_stream(request_id,control)
             return
         if p=="/api/providers/models":
             status,result=discover_provider_models(data.get("provider"),data.get("api_key"))

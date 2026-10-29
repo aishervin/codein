@@ -2107,7 +2107,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         val installCommand = "curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash"
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(ClipData.newPlainText("Codein Termux install", installCommand))
-                        output = "دستور نصب در کلیپ‌بورد کپی شد. در Termux آن را Paste و اجرا کن:\n\n" + installCommand + "\n\nنصب‌کننده خودش سرویس MCP محلی را در پس‌زمینه اجرا می‌کند؛ دستور python ~/.codein/server.py را دوباره اجرا نکن. توکن اتصال در خروجی نصب‌کننده نمایش داده می‌شود؛ همان را اینجا وارد کن. اگر اتصال برقرار نشد، لاگ را با tail -n 60 ~/.codein/logs/server.log بررسی کن. مدل‌ها از API سرویس و کلید خودت استعلام می‌شوند."
+                        output = "دستور نصب در کلیپ‌بورد کپی شد. در Termux آن را Paste و اجرا کن:\n\n" + installCommand + "\n\nنصب‌کننده سرویس MCP محلی را شروع می‌کند؛ دستور python ~/.codein/server.py را دوباره اجرا نکن. کنترل سرویس: ~/.codein/bin/codein-bridge status|start|stop|restart|logs . توکن اتصال در خروجی نصب‌کننده نمایش داده می‌شود؛ همان را اینجا وارد کن. اگر اتصال برقرار نشد، لاگ را با ~/.codein/bin/codein-bridge logs بررسی کن. مدل‌ها از API سرویس و کلید خودت استعلام می‌شوند."
                     }) { Text("کپی دستور نصب") }
                 }
                 }
@@ -2122,25 +2122,26 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     Button(onClick = {
                         busy = true
                         scope.launch {
-                            runCatching { client.execute("opencode_manage '{\"action\":\"install\"}'") }.onSuccess { status = "نصب انجام شد" }.onFailure { status = "خطای نصب" }
+                            runCatching { client.manageOpenCode("install") }.onSuccess { status = "نصب و اجرا شد" }.onFailure { status = "خطای نصب: " + (it.message ?: "خطای نامشخص") }
                             busy = false
                         }
                     }) { Text("نصب") }
                     Button(onClick = {
                         busy = true
                         scope.launch {
-                            runCatching { client.execute("opencode_manage '{\"action\":\"run\"}'") }.onSuccess { status = "اجرا شد" }.onFailure { status = "خطای اجرا" }
+                            runCatching { client.manageOpenCode("start") }.onSuccess { status = "اجرا شد" }.onFailure { status = "خطای اجرا: " + (it.message ?: "خطای نامشخص") }
                             busy = false
                         }
                     }) { Text("اجرا") }
                     Button(onClick = {
                         busy = true
                         scope.launch {
-                            runCatching { client.execute("opencode_manage '{\"action\":\"stop\"}'") }.onSuccess { status = "متوقف شد" }.onFailure { status = "خطا" }
+                            runCatching { client.manageOpenCode("stop") }.onSuccess { status = "متوقف شد" }.onFailure { status = "خطا: " + (it.message ?: "خطای نامشخص") }
                             busy = false
                         }
                     }) { Text("توقف") }
                 }
+                Text("OpenCode یک API محلی مکمل است؛ روشن‌بودنش مدل گفتگو را عوض نمی‌کند و انتخاب فعلی Codein را دور نمی‌زند.", color = TextMuted, fontSize = 11.sp)
                 }
                 }
 

@@ -11,11 +11,16 @@ HOST="127.0.0.1"
 mkdir -p "$STATE" "$ROOT/logs"
 chmod 700 "$STATE"
 
+matches_opencode() {
+  local pid="$1" args
+  args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  [[ "$args" == *"opencode serve"* ]]
+}
 alive() {
   [ -f "$PIDFILE" ] || return 1
   local pid
   pid="$(cat "$PIDFILE" 2>/dev/null || true)"
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  [[ "$pid" =~ ^[0-9]+$ ]] && matches_opencode "$pid"
 }
 probe() {
   curl --silent --show-error --fail --max-time 2 "http://$HOST:$PORT/global/health" 2>/dev/null ||
@@ -30,7 +35,12 @@ case "${1:-start}" in
     fi
     ;;
   stop)
-    if alive; then kill "$(cat "$PIDFILE")" 2>/dev/null || true; fi
+    if alive; then
+      pid="$(cat "$PIDFILE")"
+      kill "$pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do matches_opencode "$pid" || break; sleep 0.25; done
+      if matches_opencode "$pid"; then kill -9 "$pid" 2>/dev/null || true; fi
+    fi
     rm -f "$PIDFILE"
     printf '{"ok":true,"running":false}\n'
     ;;
@@ -48,7 +58,12 @@ case "${1:-start}" in
       echo "[Codein] OpenCode API already responds on $HOST:$PORT"
       exit 0
     fi
-    if alive; then kill "$(cat "$PIDFILE")" 2>/dev/null || true; sleep 1; fi
+    if alive; then
+      pid="$(cat "$PIDFILE")"
+      kill "$pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do matches_opencode "$pid" || break; sleep 0.25; done
+      if matches_opencode "$pid"; then kill -9 "$pid" 2>/dev/null || true; fi
+    fi
     rm -f "$PIDFILE"
     nohup opencode serve --hostname "$HOST" --port "$PORT" >>"$LOG" 2>&1 &
     echo "$!" > "$PIDFILE"
