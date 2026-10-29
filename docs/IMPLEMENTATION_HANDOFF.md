@@ -12,6 +12,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Cancellation disconnects the HTTP socket immediately so the server can stop upstream streaming.
 - [x] SSE framing/auth and OpenAI/Gemini/Anthropic stream tests added; all eleven Termux tests pass; Python syntax check passes.
 - [x] Live panel now shows colored waiting/receiving/tool/approval/completed stages and elapsed time; list auto-scroll includes the stage panel.
+- [x] When provider output is pending, the live stage remains on “waiting for model” while a timer advances; stage changes reflect actual server response and tool events.
 - [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
 - [x] SSE Kotlin client/UI is committed but not compiled (build prohibited); old-server streaming fallback remains.
 - [x] Gemini `streamGenerateContent` and Anthropic Messages SSE are parsed natively, including tool calls and the existing command approval gate.
@@ -99,5 +100,6 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `72101067515e7afe3e1a5ee4656ff49aa4b3e42a` — updated project checklist after tab cleanup; exact SHA has 0 workflow runs.
 - `0541e8a809997c8b4781a5feed8c8a1b43d90c6f` — finalized Agent Room handoff status; exact SHA has 0 workflow runs.
 - `de130efc3f228ed3afdb3cac50362cc15db47af3` — native Gemini/Anthropic SSE plus parser, request and approval-gate tests; exact SHA has 0 workflow runs.
-- `python3 -m unittest termux/test_mcp.py` — 11 tests passed, including Gemini/Anthropic streaming and approval gate; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
+- `8159b3ead9393899330d890c390dccd0658ae2ae` — colored live processing stages, elapsed timer, auto-scroll and server provider-stage events; exact SHA has 0 workflow runs. Kotlin remains uncompiled by request.
+- `python3 -B -m unittest termux/test_mcp.py` — 11 tests passed, including provider stage events; `python3 -B -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
 - `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.
