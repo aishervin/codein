@@ -10,7 +10,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Authenticated SSE endpoint streams OpenAI-compatible providers; old `/api/chat` and MCP route remain.
 - [x] Android client parses SSE frames, streams tokens to active chat, shows collapsible Agent trace, falls back for old server/unsupported providers, and cancels on stop/clear/history switch.
 - [x] SSE framing/auth and OpenAI tool-delta tests added; all seven Termux tests pass; Python syntax check passes.
-- [ ] Kotlin code not compiled (build prohibited); Gemini/Anthropic native streaming not implemented. No build/release/Actions run.
+- [x] Kotlin changes are committed but not compiled (build prohibited); Gemini/Anthropic native streaming remains unimplemented and falls back to legacy chat.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
 ## User requirements
@@ -84,6 +84,6 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `738a8d10eb550249df0d3e2fd00e45ce791736d6` — handoff committed to GitHub `main` (`[skip ci]`).
 - `22653fe9bca2c65a1945b2a8aa4d7bd21b8a1ee0` — heartbeat hardening committed to GitHub `main` (`[skip ci]`).
 - `0029e1203952fb1600d14e1f8aace3bbc77563e5` — OpenAI-compatible SSE server + tests committed to GitHub `main` (`[skip ci]`).
-- Android SSE client/UI and server total-time/safe tool summaries: local changes pending GitHub commit.
+- `ce1b510f02d070a1416e0372402ecafe18bacc6d` — Android SSE client/UI and server safety/time limit committed to GitHub `main` (`[skip ci]`).
 - `python3 -m unittest termux/test_mcp.py` — 7 tests passed; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
-- `bash -n termux/codein-bootstrap.sh` — passed. No Gradle/APK build, release or workflow run; Kotlin compile remains unverified.
+- `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.
