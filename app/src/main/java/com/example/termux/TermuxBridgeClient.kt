@@ -361,10 +361,12 @@ class TermuxBridgeClient(context: Context) {
         }
     }
 
-    /** Save the Composio Connect consumer key in the Termux-only vault. */
-    suspend fun configureComposio(consumerKey: String): JSONObject {
-        require(consumerKey.trim().startsWith("ck_")) { "Composio consumer key must start with ck_" }
-        return mcpTool("composio_configure", JSONObject().put("consumer_api_key", consumerKey.trim()), 45)
+    /** Configure the public Codein Worker; its Composio project key stays server-side. */
+    suspend fun configureComposioPlatform(workerUrl: String): JSONObject {
+        require(workerUrl.trim().startsWith("https://") && workerUrl.trim().contains(".workers.dev")) {
+            "Codein Composio Worker is not configured in this app build."
+        }
+        return mcpTool("composio_platform_configure", JSONObject().put("worker_url", workerUrl.trim()), 45)
     }
 
     /** Refresh the live Composio tool list from the connected Termux MCP server. */

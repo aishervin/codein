@@ -30,7 +30,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - Work directly on `main`, make small commits and push to GitHub. The earlier no-build restriction was superseded: the user explicitly authorized building and publishing Codein 1.1.0. Avoid unintended workflow runs; release only through the reviewed manual workflow.
 - Preserve command approval. `termux_exec` requires a recorded approval for the exact command; the UI first records approval, then executes it.
 - Do not remove existing features without checking their callers/contracts. Preserve user changes.
-- Composio key is embedded through `BuildConfig`; prefs alone do not make an APK-embedded secret secure. Do not remove/migrate it until a backward-compatible replacement exists.
+- The public Composio path must not embed a project key in `BuildConfig`; use the Worker. Preserve the local Termux consumer-key fallback for existing local users.
 
 ## Relevant files and findings
 - `app/src/main/java/com/example/ui/MainScreen.kt`: main chat + `TermuxAgentRoomDialog` (~1881); Termux connection state near lines 362-383.
@@ -76,8 +76,8 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Audit controls and callbacks before reorganizing `TermuxAgentRoomDialog`.
 - [x] Simplify into Models, Services, Composio and Report tabs; advanced OpenCode controls remain collapsible.
 - [x] Mask credential values and show only timestamp/kind in the report tab.
-- [ ] Verify Composio Connect endpoints/tools against current code/docs before modifying OAuth behavior.
-- [ ] Do not remove `COMPOSIO_API_KEY` from builds until a tested migration/replacement preserves existing users. No secret migration by assumption.
+- [x] Verify Composio Platform session, tool, execution, and connection APIs against current official docs.
+- [x] Replace the Android-bundled `COMPOSIO_API_KEY` with a server-only Platform Worker; preserve existing Termux consumer-key files as a local-only fallback.
 
 ### 5. Docs, verification, commits
 - [x] Update bootstrap to install the bridge lifecycle manager and start it without an endless supervisor loop.
@@ -116,4 +116,15 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `fdf6203` — cancel Codein streams, manage Termux/OpenCode lifecycle, Gemini schema/error handling; committed locally on `main` with `[skip ci]`. This commit has not been pushed; local GitHub write credentials are unavailable, and the connected integration commit request exceeded this environment's argument-size limit.
 - `python3 -B -m unittest termux/test_mcp.py` — 16 tests passed; Python `compile()` syntax checks, `bash -n termux/codein-bootstrap.sh termux/codein-bridge termux/codein-opencode`, and `git diff --check` passed. Local Kotlin compilation is unavailable because Java/Gradle are absent.
 - The authorized GitHub Android Release workflow previously built the signed APK and published v1.1.0. No workflow has run for the local commit.
-- Android Release run `40909550882` — success on `bd5a87f57d870e6c9833590bb01144e5d228ed10`. Published `Codein-1.1.0-Universal.apk` (10,946,816 bytes); release: https://github.com/aishervin/codein/releases/tag/v1.1.0 . `COMPOSIO_API_KEY` remains passed into the build; secret values were not accessed.
+- Android Release run `40909550882` — success on `bd5a87f57d870e6c9833590bb01144e5d228ed10`. Published `Codein-1.1.0-Universal.apk` (10,946,816 bytes); release: https://github.com/aishervin/codein/releases/tag/v1.1.0 . That historical APK build included the `COMPOSIO_API_KEY` build field; rotate any key previously injected there before using it again. Secret values were not accessed.
+
+## Current Composio Worker handoff (2026-10-29)
+- Public integration now uses `worker/` as a server-side Composio Platform proxy. Each Termux installation receives an anonymous signed identity and persistent session; the Worker checks session ownership and rate-limits bootstrap and authenticated API calls.
+- Android no longer needs a Composio project key. GitHub Actions reads the non-secret `COMPOSIO_WORKER_URL` repository variable. The legacy Termux consumer-key path remains local-only.
+- Verification in this workspace: `python3 -B -m unittest termux/test_mcp.py` passed (18 tests); `node --test worker/test-worker.mjs` passed (5 tests); `node --check worker/src/index.mjs`, `bash -n termux/codein-bootstrap.sh`, Python syntax checks, and `git diff --check` passed.
+- Android Kotlin compilation remains unverified because Java is unavailable (`JAVA_HOME` is unset and no `java` executable is installed).
+- Cloudflare deployment is blocked: the connected Cloudflare API returned an invalid `X-Auth-Key` format error. The user says the account was registered by email; the direct Cloudflare email/password form rejected the secure sign-in attempt. The live browser is left at Cloudflare's login page for the user to take over. No Worker deployment or secret configuration has happened.
+- The published `https://codein.shen-zero.workers.dev/` endpoint still returns the default `Hello world` response on `/health`, `/`, and `/v1/bootstrap`; Codein has not been deployed there. The supplied URL implies the Worker name `codein`, so `worker/wrangler.jsonc` now targets that existing Worker name.
+- A Cloudflare build log ran `npx wrangler deploy` from the repository root and failed to find static files because no root Wrangler config was present. The config now lives at the repository root and points to `worker/src/index.mjs`, matching Cloudflare's existing deploy command. If the project is configured as a static Pages site, use a Workers project instead.
+- Cloudflare's Git build can only deploy Worker files present in its connected remote branch; push the Worker source/config before retrying that build.
+- Next: user completes Cloudflare sign-in in the live browser; configure a scoped Composio Platform project key and generated identity-signing secret through Wrangler secure prompts; deploy `worker/`; set GitHub Actions variable `COMPOSIO_WORKER_URL`; then run a public-path integration check and build the APK.

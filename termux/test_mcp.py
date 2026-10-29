@@ -349,7 +349,26 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(status, 202)
         _, response = self.rpc("tools/list")
         names = {tool["name"] for tool in response["result"]["tools"]}
-        self.assertTrue({"termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_chat"} <= names)
+        self.assertTrue({"termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_chat", "composio_platform_configure"} <= names)
+
+    def test_composio_platform_configuration_never_returns_install_token(self):
+        with patch.object(mcp_server.composio_platform, "configure", return_value={"ok":True,"user_id":"codein_0123456789abcdef0123456789abcdef","reused":False}), \
+                patch.object(mcp_server, "event"):
+            result = self.call_tool("composio_platform_configure", {"worker_url":"https://codein.workers.dev"})
+        self.assertTrue(result["ok"])
+        self.assertNotIn("token", result)
+
+    def test_composio_platform_identity_is_used_for_catalog_and_tool_calls(self):
+        config={"worker_url":"https://codein.workers.dev","token":"local-install-token","user_id":"codein_0123456789abcdef0123456789abcdef"}
+        with patch.object(mcp_server.composio_platform, "read_config", return_value=config), \
+                patch.object(mcp_server.composio_platform, "tools", return_value=[{"name":"COMPOSIO_MANAGE_CONNECTIONS","description":"Connect an account","inputSchema":{"type":"object","properties":{}}}]) as list_tools, \
+                patch.object(mcp_server.composio_platform, "call_tool", return_value={"redirect_url":"https://connect.example/link"}) as call_tool:
+            catalog=mcp_server.composio_tool_catalog()
+            result=mcp_server.dispatch_mcp_tool("composio__COMPOSIO_MANAGE_CONNECTIONS", {"toolkit":"gmail"})
+        self.assertEqual(catalog[0]["name"],"composio__COMPOSIO_MANAGE_CONNECTIONS")
+        self.assertEqual(result["redirect_url"],"https://connect.example/link")
+        list_tools.assert_called_once_with(config)
+        call_tool.assert_called_once_with("COMPOSIO_MANAGE_CONNECTIONS",{"toolkit":"gmail"},config)
 
     def test_local_agent_room_tools(self):
         saved = self.call_tool("credential_save", {"name": "test_key", "value": "unit-secret"})

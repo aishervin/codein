@@ -1,27 +1,32 @@
-# Composio Connect for Codein
+# Composio Platform for Codein
 
-This optional integration lets Codein's Termux agent use Composio Connect MCP tools alongside its local tools.
+The public Codein app uses Composio Platform sessions. Each Termux installation gets its own signed identity; connected accounts and tool calls are isolated under that Composio user ID. App users do not need a Composio API key.
 
 ## Setup
 
-1. Pair Codein with the local Termux bridge and select a Termux provider model in the app. Composio actions are initiated through that selected model.
-2. Create a consumer key for an AI client in Composio. It should be a consumer key (typically `ck_...`), not a platform/project API key.
-3. In Codein, open the Termux Agent Room's Composio tab, enter the key in the masked field, and choose **Save key and prepare**. The bridge stores it under `~/.codein/keys/composio_consumer_api_key.json` with file permissions `0600`.
-4. Enter a service name such as Gmail or GitHub and choose **Start connection**. Codein asks the selected model to start Composio's hosted authorization flow; open the returned link, approve access on the service, then return to Codein and choose **Check connection**.
-5. After Composio confirms the account, ask the selected model to use that service. The available Composio tools are exposed to the model tool loop with a `composio__` prefix.
+1. Deploy `worker/` using the instructions in `worker/README.md`.
+2. Configure the Android build with the resulting Worker URL through the GitHub Actions variable `COMPOSIO_WORKER_URL`.
+3. Re-run the Codein Termux installer to install the Platform client helper.
+4. Connect Termux in Codein, open the Composio tab, and choose **Set up securely**. The helper requests a signed per-install identity and stores it locally in `~/.codein/keys/composio_platform.json` with file permissions `0600`.
+5. Choose a service and select **Start connection**. The active model creates a hosted authorization link. Approve the requested access in the provider page, then return to Codein.
 
-Composio Connect hosts the remote MCP endpoint, so Codein does not need its own public Composio gateway. Codein still needs the local Termux bridge for the selected model and local agent tools.
+Composio stores connected-account credentials. Neither Codein nor its model handles provider OAuth tokens.
 
-## Implementation
+## Architecture
 
-- Hosted endpoint: `https://connect.composio.dev/mcp`
-- Authentication header: `x-consumer-api-key`
-- MCP transport helper: `termux/composio_connect.py`
-- Agent tool routing: `termux/server.py`
-- Termux bootstrap downloads the helper into `~/.codein/composio_connect.py`.
+- Public Worker source: `worker/src/index.mjs`
+- Composio API key and identity-signing key: Cloudflare Worker secrets only.
+- Platform helper: `termux/composio_platform.py`
+- Termux bridge creates one persistent Composio session for each installation. The Worker checks session ownership against the signed identity before returning tools or executing actions.
+- Legacy locally stored consumer-key connections remain supported for existing installations, but the public UI no longer requests those keys.
 
-The consumer key is entered in the masked Composio field, sent to the local bridge, and stored in its private key vault; do not send it through chat. Only connect the apps and permissions you need. Composio free-tier limits, premium tool billing, and third-party OAuth requirements still apply.
+## Identity and recovery
 
-Official docs:
-- https://docs.composio.dev/docs/composio-connect
-- https://docs.composio.dev/reference/authenticating-to-composio
+This version uses an anonymous identity per Termux installation, not a Codein account. Deleting the Termux data directory or moving to another installation loses access to the old Composio identity and its connected accounts. A future account system is required for cross-device recovery.
+
+The Worker rate-limits bootstrap and authenticated API calls. Create a scoped Composio Platform project key with Session management read/write and Session tool execution write permissions. Do not place it in Android build settings, GitHub Actions variables, chat, or source control.
+
+References:
+- https://docs.composio.dev/docs/authentication
+- https://docs.composio.dev/docs/sessions-via-mcp
+- https://docs.composio.dev/reference/api-reference/tool-router

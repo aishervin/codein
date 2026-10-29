@@ -11,8 +11,8 @@ val releaseStorePassword = System.getenv("STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("KEY_ALIAS")
 val releaseKeyPassword = System.getenv("KEY_PASSWORD")
 val hasReleaseKey = listOf(keyStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
-val composioApiKey = providers.gradleProperty("COMPOSIO_API_KEY").orElse(providers.environmentVariable("COMPOSIO_API_KEY")).getOrElse("")
-val escapedComposioApiKey = composioApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
+val composioWorkerUrl = providers.gradleProperty("COMPOSIO_WORKER_URL").orElse(providers.environmentVariable("COMPOSIO_WORKER_URL")).getOrElse("")
+val escapedComposioWorkerUrl = composioWorkerUrl.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.example"
@@ -26,7 +26,7 @@ android {
         versionCode = requestedVersionCode
         versionName = requestedVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "COMPOSIO_API_KEY", "\"$escapedComposioApiKey\"")
+        buildConfigField("String", "COMPOSIO_WORKER_URL", "\"$escapedComposioWorkerUrl\"")
     }
 
     if (hasReleaseKey) {

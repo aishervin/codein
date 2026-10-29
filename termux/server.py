@@ -9,6 +9,7 @@ from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 import composio_connect
+import composio_platform
 
 ROOT=Path.home()/".codein"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
@@ -158,6 +159,17 @@ def discover_provider_models(pid, api_key):
 
 
 def composio_tool_catalog():
+    platform_config=composio_platform.read_config()
+    if platform_config.get("worker_url") and platform_config.get("token"):
+        try:
+            remote=composio_platform.tools(platform_config)
+            return [{"name":"composio__"+str(t["name"]),
+                     "description":"Composio connected-service tool. "+str(t.get("description",""))[:1000],
+                     "inputSchema":t.get("inputSchema") or {"type":"object","properties":{}}}
+                    for t in remote if isinstance(t,dict) and t.get("name")]
+        except Exception as exc:
+            event("composio_tools_error",{"error":str(exc)[:250]})
+            return []
     key_data=readj(KEYS/"composio_consumer_api_key.json",{})
     key=str(key_data.get("value","")).strip()
     if not key: return []
@@ -173,8 +185,8 @@ def composio_tool_catalog():
 
 def mcp_tools_catalog():
     local_tools = [
-        {"name":"composio_configure","description":"Save a Composio Connect consumer key in the private Termux credential vault. Never print the key.","inputSchema":{"type":"object","properties":{"consumer_api_key":{"type":"string","description":"Composio Connect consumer key (ck_...)"}}, "required":["consumer_api_key"]}},
-        {"name":"composio_tools_refresh","description":"Discover tools available from Composio Connect after apps have been connected.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"composio_platform_configure","description":"Set up Codein's Composio Platform Worker and create or reuse this Termux installation's private Composio identity. The Worker address is supplied by the app; never ask the user for a Composio API key.","inputSchema":{"type":"object","properties":{"worker_url":{"type":"string","description":"The HTTPS workers.dev address configured by the Codein app."}}, "required":["worker_url"]}},
+        {"name":"composio_tools_refresh","description":"Discover Composio session tools for this installation's private user identity.","inputSchema":{"type":"object","properties":{}}},
         {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. This tool requires explicit user approval for each command.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
         {"name":"termux_command_approve","description":"Record user approval for the exact shell command shown in the app permission prompt. Do not call unless the user explicitly approved it.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Exact command approved by the user"},"always":{"type":"boolean","default":False,"description":"Persist approval for this exact command string"}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
@@ -192,6 +204,10 @@ def mcp_tools_catalog():
 
 def dispatch_mcp_tool(name, args):
     args=args if isinstance(args,dict) else {}
+    if name=="composio_platform_configure":
+        result=composio_platform.configure(args.get("worker_url"))
+        event("composio_platform_configured",{"configured":True,"reused":bool(result.get("reused"))})
+        return {"ok":True,"reused":bool(result.get("reused")),"message":"Codein Composio Platform is ready for this Termux installation. The identity token was saved in the private local vault."}
     if name=="composio_configure":
         value=str(args.get("consumer_api_key","")).strip()
         if not value.startswith("ck_") or len(value)<12: raise ValueError("A valid Composio Connect consumer key (ck_...) is required.")
@@ -202,9 +218,14 @@ def dispatch_mcp_tool(name, args):
         return {"ok":True,"message":"Composio key saved locally. Call composio_tools_refresh to discover service tools."}
     if name=="composio_tools_refresh":
         tools=composio_tool_catalog()
-        if not tools: raise RuntimeError("No Composio tools found. Verify the consumer key and connect services in Composio.")
+        if not tools: raise RuntimeError("No Composio tools found. Configure the Codein Worker and connect a service first.")
         return {"ok":True,"count":len(tools),"tools":[{"name":t["name"],"description":t["description"][:180]} for t in tools]}
     if name.startswith("composio__"):
+        platform_config=composio_platform.read_config()
+        if platform_config.get("worker_url") and platform_config.get("token"):
+            result=composio_platform.call_tool(name[len("composio__"):],args,platform_config)
+            event("composio_tool_called",{"tool":name})
+            return result
         key=str(readj(KEYS/"composio_consumer_api_key.json",{}).get("value","")).strip()
         if not key: raise RuntimeError("Composio is not configured.")
         result=composio_connect.call_tool(key,name[len("composio__"):],args)
@@ -507,7 +528,7 @@ def provider_chat(data, emit=None, cancel=None):
     deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",300)),300)) if emit else None
     # Provider-native model calls receive only local action tools. Avoid recursion
     # and don't ask the model to invent API keys for provider discovery.
-    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve","opencode_manage")]
+    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve","opencode_manage","composio_platform_configure")]
     try:
         if cancel: cancel.check()
         if provider["kind"]=="gemini":
