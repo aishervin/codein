@@ -11,7 +11,9 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Android client parses SSE frames, streams tokens to active chat, shows collapsible Agent trace, falls back for old server/unsupported providers, and cancels on stop/clear/history switch.
 - [x] Cancellation disconnects the HTTP socket immediately so the server can stop upstream streaming.
 - [x] SSE framing/auth and OpenAI tool-delta tests added; all seven Termux tests pass; Python syntax check passes.
-- [x] Kotlin changes are committed but not compiled (build prohibited); Gemini/Anthropic native streaming remains unimplemented and falls back to legacy chat.
+- [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
+- [x] SSE Kotlin client/UI is committed but not compiled (build prohibited); Gemini/Anthropic native streaming remains unimplemented and falls back to legacy chat.
+- [ ] Agent Room tab and credential-masking UI changes are implemented locally, not yet committed.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
 ## User requirements
@@ -56,14 +58,14 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Handle 401, missing provider key, timeout and old Termux server; old server falls back to MCP chat.
 
 ### 4. Agent Room UI / integration
-- [ ] Audit controls and callbacks before reorganizing `TermuxAgentRoomDialog`.
-- [ ] Simplify into Models, Services, Composio and Logs sections; keep advanced MCP settings accessible if used.
-- [ ] Use one connection state with last useful error; keep credential values hidden.
+- [x] Audit controls and callbacks before reorganizing `TermuxAgentRoomDialog`.
+- [x] Simplify into Models, Services, Composio and Report tabs; advanced OpenCode controls remain collapsible.
+- [x] Mask credential values and show only timestamp/kind in the report tab.
 - [ ] Verify Composio Connect endpoints/tools against current code/docs before modifying OAuth behavior.
 - [ ] Do not remove `COMPOSIO_API_KEY` from builds until a tested migration/replacement preserves existing users. No secret migration by assumption.
 
 ### 5. Docs, verification, commits
-- [ ] Update bootstrap/docs for server protocol changes; existing installer fetches server from `main`.
+- [x] Update Agent Room design doc; bootstrap already fetches server from `main`, so no installer change is required.
 - [x] Run Python/unit/bash checks only; do not run Gradle, APK build, release or workflow.
 - [ ] Review full diff for approval bypass, unintended Hero/Zero/Dolphin changes, identifier/signing changes and secrets.
 - [ ] Update this checklist and `outputs/codein-handoff.md` with facts, tests and commit hashes.
@@ -89,5 +91,6 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `ce1b510f02d070a1416e0372402ecafe18bacc6d` — Android SSE client/UI and server safety/time limit committed to GitHub `main` (`[skip ci]`).
 - `c427af68d83a8e889014be25e6f8e1d4bd7f300a` — previous handoff commit; exact SHA had 0 workflow runs.
 - `0236614d6504d9a6bfcdec327b61ce06e31f161e` — immediate SSE cancellation added; its exact SHA has 0 workflow runs. Kotlin remains uncompiled.
+- Agent Room tab cleanup and design-doc update: local changes pending GitHub commit.
 - `python3 -m unittest termux/test_mcp.py` — 7 tests passed; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
 - `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.

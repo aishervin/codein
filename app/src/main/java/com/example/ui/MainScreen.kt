@@ -126,6 +126,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
@@ -1934,6 +1935,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
     var savedKeys by remember { mutableStateOf(emptyList<String>()) }
     var status by remember { mutableStateOf("اتصال ترموکس هنوز برقرار نشده") }
     var output by remember { mutableStateOf("") }
+    var roomEventLines by remember { mutableStateOf(emptyList<String>()) }
     var terminalCommand by remember { mutableStateOf("") }
     var terminalOutput by remember { mutableStateOf("") }
     var skillNames by remember { mutableStateOf(emptyList<String>()) }
@@ -1941,6 +1943,9 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
     var composioStatus by remember { mutableStateOf("Composio هنوز پیکربندی نشده") }
     var composioTools by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
     var busy by remember { mutableStateOf(false) }
+    var selectedRoomTab by remember { mutableStateOf(0) }
+    var showAdvancedOpenCode by remember { mutableStateOf(false) }
+    val roomTabs = listOf("مدل‌ها", "سرویس‌ها", "Composio", "گزارش")
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1955,10 +1960,20 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                 modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
+                TabRow(selectedTabIndex = selectedRoomTab) {
+                    roomTabs.forEachIndexed { index, label ->
+                        Tab(
+                            selected = selectedRoomTab == index,
+                            onClick = { selectedRoomTab = index },
+                            text = { Text(label, maxLines = 1, fontSize = 11.sp) }
+                        )
+                    }
+                }
                 Text(status, color = if (status.startsWith("Connected") || status.startsWith("متصل")) Color(0xFF4DDB8A) else NeonOrangeSoft, fontSize = 12.sp)
+                if (selectedRoomTab == 1) {
                 Text("این صفحه فقط وقتی کار می‌کند که پل محلی Codein در Termux اجرا باشد. آدرس پیش‌فرض همین گوشی است؛ معمولاً نیازی به تغییرش نیست.", color = TextMuted, fontSize = 12.sp)
                 OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("آدرس پل محلی (پیش‌فرض)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("توکن اتصال محلی") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("توکن اتصال محلی") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
                 Text("توکن را یک‌بار از فایل ~/.codein/config.json داخل Termux بردار. این توکن فقط برای اتصال همین گوشی است؛ آن را در چت یا مخزن کد نفرست.", color = TextMuted, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(enabled = !busy, onClick = {
@@ -1976,6 +1991,12 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                                     status = "متصل · " + it.first.optString("service", "Termux")
                                     savedKeys = it.third
                                     skillNames = it.second.optJSONObject("skills")?.keys()?.asSequence()?.toList().orEmpty().sorted()
+                                    val events = it.second.optJSONArray("events") ?: JSONArray()
+                                    roomEventLines = (0 until events.length()).mapNotNull { index ->
+                                        events.optJSONObject(index)?.let { event ->
+                                            event.optString("at").take(19) + " · " + event.optString("kind")
+                                        }
+                                    }.takeLast(40)
                                     onRoomContextLoaded(it.second)
                                     output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
                                         "\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" }) +
@@ -1992,7 +2013,13 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         output = "دستور نصب در کلیپ‌بورد کپی شد. در Termux آن را Paste و اجرا کن:\n\n" + installCommand + "\n\nنصب‌کننده خودش سرویس MCP محلی را در پس‌زمینه اجرا می‌کند؛ دستور python ~/.codein/server.py را دوباره اجرا نکن. توکن اتصال در خروجی نصب‌کننده نمایش داده می‌شود؛ همان را اینجا وارد کن. اگر اتصال برقرار نشد، لاگ را با tail -n 60 ~/.codein/logs/server.log بررسی کن. مدل‌ها از API سرویس و کلید خودت استعلام می‌شوند."
                     }) { Text("کپی دستور نصب") }
                 }
+                }
+                if (selectedRoomTab == 1) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
+                TextButton(onClick = { showAdvancedOpenCode = !showAdvancedOpenCode }) {
+                    Text(if (showAdvancedOpenCode) "بستن ابزارهای پیشرفته" else "ابزارهای پیشرفته")
+                }
+                if (showAdvancedOpenCode) {
                 Text("OPENCODE · مدیریت ایجنت هوشمند", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
@@ -2017,11 +2044,14 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                         }
                     }) { Text("توقف") }
                 }
+                }
+                }
 
+                if (selectedRoomTab == 2) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
                 Text("COMPOSIO · اتصال سرویس‌ها", color = NeonOrangeSoft, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text(if (BuildConfig.COMPOSIO_API_KEY.isNotBlank()) "کلید Composio از GitHub Actions داخل این نسخه تنظیم شده است؛ برای اتصال فقط دکمه را بزن." else "کلید Composio را وارد کن یا در GitHub Actions به‌عنوان COMPOSIO_API_KEY ذخیره کن.", color = TextMuted, fontSize = 11.sp)
-                if (BuildConfig.COMPOSIO_API_KEY.isBlank()) OutlinedTextField(value = composioKey, onValueChange = { composioKey = it }, label = { Text("Composio Consumer Key (ck_…)") }, placeholder = { Text("ck_…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (BuildConfig.COMPOSIO_API_KEY.isBlank()) OutlinedTextField(value = composioKey, onValueChange = { composioKey = it }, label = { Text("Composio Consumer Key (ck_…)") }, placeholder = { Text("ck_…") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(enabled = !busy && composioKey.trim().startsWith("ck_"), onClick = {
                         busy = true
@@ -2061,6 +2091,8 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                 } else {
                     Text("بعد از اتصال موفق، فقط ابزارهایی که Composio واقعاً برمی‌گرداند اینجا نمایش داده می‌شوند؛ سپس ایجنت می‌تواند آن‌ها را فراخوانی کند.", color = TextMuted, fontSize = 10.sp)
                 }
+                }
+                if (selectedRoomTab == 3) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
                 Text("SKILLS · مهارت‌های در دسترس", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 if (skillNames.isEmpty()) {
@@ -2068,6 +2100,30 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                 } else {
                     Text(skillNames.joinToString("  ·  "), color = TextMuted, fontSize = 11.sp)
                 }
+                Text("رویدادهای اخیر", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                TextButton(enabled = !busy && token.isNotBlank(), onClick = {
+                    busy = true
+                    client.baseUrl = baseUrl
+                    client.bearerToken = token
+                    scope.launch {
+                        runCatching { client.roomContext() }.onSuccess { room ->
+                            val events = room.optJSONArray("events") ?: JSONArray()
+                            roomEventLines = (0 until events.length()).mapNotNull { index ->
+                                events.optJSONObject(index)?.let { event ->
+                                    event.optString("at").take(19) + " · " + event.optString("kind")
+                                }
+                            }.takeLast(40)
+                        }.onFailure { status = "بارگیری گزارش ناموفق: " + (it.message ?: "خطای نامشخص") }
+                        busy = false
+                    }
+                }) { Text("تازه‌سازی گزارش") }
+                if (roomEventLines.isEmpty()) {
+                    Text("هنوز رویدادی برای نمایش وجود ندارد.", color = TextMuted, fontSize = 11.sp)
+                } else {
+                    roomEventLines.forEach { line -> Text(line, color = TextMuted, fontSize = 10.sp) }
+                }
+                }
+                if (selectedRoomTab == 0) {
                 Text("مدل‌های هوش مصنوعی", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 var aiProviderId by remember(integrationPrefs) { mutableStateOf(integrationPrefs.getString("ai_provider", "gemini") ?: "gemini") }
                 var aiProviderMenuExpanded by remember { mutableStateOf(false) }
@@ -2128,6 +2184,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     onValueChange = { aiKeyValue = it; aiModels = emptyList(); selectedAiModel = "" },
                     label = { Text("API key سرویس انتخاب‌شده") },
                     singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Button(
@@ -2229,9 +2286,11 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("ذخیرهٔ کلید و فعال‌کردن مدل") }
+                ) { Text("ذخیرهٔ کلید و فعال‌کردن مدل") }
+                }
                 }
 
+                if (selectedRoomTab == 1) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
                 Text("توکن ابزارها و سرویس‌های دیگر", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 var serviceMenuExpanded by remember { mutableStateOf(false) }
@@ -2269,6 +2328,7 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     onValueChange = { serviceTokenValue = it },
                     label = { Text(if (savedKeys.contains(keyName)) "توکن جدید (اختیاری برای جایگزینی)" else "توکن سرویس") },
                     singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Button(
@@ -2296,14 +2356,17 @@ private fun TermuxAgentRoomDialog(onDismiss: () -> Unit, onRoomContextLoaded: (J
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("ذخیرهٔ توکن سرویس") }
+                }
+                if (selectedRoomTab == 3) {
                 if (output.isNotBlank()) {
                     Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Text(output.takeLast(5000), color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
                     }
                 }
+                }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("بستن") } },
         containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface
