@@ -13,7 +13,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] SSE framing/auth and OpenAI tool-delta tests added; all seven Termux tests pass; Python syntax check passes.
 - [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
 - [x] SSE Kotlin client/UI is committed but not compiled (build prohibited); Gemini/Anthropic native streaming remains unimplemented and falls back to legacy chat.
-- [ ] Agent Room tab and credential-masking UI changes are implemented locally, not yet committed.
+- [x] Agent Room tab and credential-masking UI committed; report tab shows event timestamps/kinds only.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
 ## User requirements
@@ -91,6 +91,6 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `ce1b510f02d070a1416e0372402ecafe18bacc6d` — Android SSE client/UI and server safety/time limit committed to GitHub `main` (`[skip ci]`).
 - `c427af68d83a8e889014be25e6f8e1d4bd7f300a` — previous handoff commit; exact SHA had 0 workflow runs.
 - `0236614d6504d9a6bfcdec327b61ce06e31f161e` — immediate SSE cancellation added; its exact SHA has 0 workflow runs. Kotlin remains uncompiled.
-- Agent Room tab cleanup and design-doc update: local changes pending GitHub commit.
+- `3cd42a056afc8310c5cab70d4b1b5c409149ed63` — Agent Room tabs, masked credentials, report view, and design doc; exact SHA has 0 workflow runs.
 - `python3 -m unittest termux/test_mcp.py` — 7 tests passed; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
 - `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.
