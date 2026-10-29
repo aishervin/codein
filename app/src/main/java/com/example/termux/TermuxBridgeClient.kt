@@ -17,6 +17,8 @@ class MissingProviderCredential(val credentialName: String, val providerName: St
 
 class TermuxBridgeClient(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("codein_termux_bridge", Context.MODE_PRIVATE)
+    private var consecutivePingFailures = 0
+    private var pingHasSucceeded = false
 
     var baseUrl: String
         get() = prefs.getString("base_url", "http://127.0.0.1:8765")!!.trimEnd('/')
@@ -51,7 +53,21 @@ class TermuxBridgeClient(context: Context) {
     }
 
     /** Lightweight MCP liveness probe for the periodic connection indicator. */
-    suspend fun ping(): JSONObject = mcpRequest("ping", JSONObject())
+    suspend fun ping(): JSONObject {
+        return try {
+            mcpRequest("ping", JSONObject(), timeoutSeconds = 2).also {
+                consecutivePingFailures = 0
+                pingHasSucceeded = true
+            }
+        } catch (error: Exception) {
+            consecutivePingFailures++
+            if (pingHasSucceeded && consecutivePingFailures < 3) {
+                JSONObject().put("ok", true).put("stale", true)
+            } else {
+                throw error
+            }
+        }
+    }
 
     suspend fun workspace(): JSONObject = request("GET", "/api/workspace")
 
@@ -167,8 +183,8 @@ class TermuxBridgeClient(context: Context) {
             val payload = JSONObject().put("jsonrpc", "2.0").put("id", id).put("method", method).put("params", params)
             val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = 8_000
-                readTimeout = (timeoutSeconds.coerceAtMost(900) * 1000).coerceAtLeast(45_000)
+                connectTimeout = timeoutSeconds.coerceIn(1, 8) * 1000
+                readTimeout = timeoutSeconds.coerceIn(1, 900) * 1000
                 setRequestProperty("Authorization", "Bearer " + bearerToken)
                 setRequestProperty("MCP-Protocol-Version", "2025-03-26")
                 setRequestProperty("Accept", "application/json, text/event-stream")

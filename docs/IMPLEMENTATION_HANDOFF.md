@@ -1,51 +1,84 @@
 # Codein implementation handoff
 
-Update this checklist after each chunk.
+Update this file after each completed work chunk. Keep it in sync with `outputs/codein-handoff.md`.
 
-## Progress
-- [x] Initial repo/Termux flow reviewed; clean main at `0bc77f2`.
-- [x] Review report: `outputs/codein-review.html` (workspace only).
-- [x] Handoff added to `docs/IMPLEMENTATION_HANDOFF.md`.
-- [ ] No code changes or tests yet. No build/release/Actions run.
-- Connection check is already MCP `ping` every 12 seconds, NOT initialize/tools-list. One transient error immediately flips UI state false.
-- Command flow records approval for the exact command, then executes it. Preserve this gate.
+## Current status
+- [x] Initial repository and Termux/Agent flow reviewed.
+- [x] Review report created: `outputs/codein-review.html` (workspace deliverable).
+- [x] Initial Git status checked: clean `main`, HEAD `0bc77f2` (`Build main artifacts as Codein 1.0.9`).
+- [x] Agent Room heartbeat hardened locally: 2-second MCP ping; after first success, two transient errors do not flap UI status.
+- [ ] Heartbeat code chunk not yet committed to GitHub; no tests/build/release/Actions run.
+- [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
-## Requirements
-- Persian UI, English code/commit messages. Do not alter Hero/Zero or Dolphin (`chat.dphn.ai`).
-- Preserve app id, namespace, signing and existing user behavior.
-- Make small commits directly on `main`, push with `[skip ci]`; never run/trigger builds/releases. Push workflows otherwise build.
-- Never execute proposed shell commands without explicit user approval. Do not remove Composio BuildConfig key until a backward-compatible alternative exists; prefs alone do not secure an APK-embedded key.
+## User requirements
+- Persian UI; English code and commit messages.
+- Do not alter Hero/Zero or Dolphin (`chat.dphn.ai`); scope changes to Agent Room/Termux.
+- Preserve `applicationId`, namespace, signing and existing user behavior.
+- Work directly on `main`, make small commits and push to GitHub. Never run or trigger a build/release. Use `[skip ci]` in pushed commit messages because current push workflows otherwise build.
+- Preserve command approval. `termux_exec` requires a recorded approval for the exact command; the UI first records approval, then executes it.
+- Do not remove existing features without checking their callers/contracts. Preserve user changes.
+- Composio key is embedded through `BuildConfig`; prefs alone do not make an APK-embedded secret secure. Do not remove/migrate it until a backward-compatible replacement exists.
 
-## Files examined
-`MainScreen.kt` (connection state and Agent Room UI), `TermuxBridgeClient.kt` (MCP/HTTP client), `termux/server.py` (provider chat/tools/approval), `termux/codein-bootstrap.sh`, `.github/workflows/android-{ci,main-build}.yml`.
+## Relevant files and findings
+- `app/src/main/java/com/example/ui/MainScreen.kt`: main chat + `TermuxAgentRoomDialog` (~1881); Termux connection state near lines 362-383.
+- `app/src/main/java/com/example/termux/TermuxBridgeClient.kt`: MCP and REST client; `ping()` already calls lightweight MCP `ping`.
+- `termux/server.py`: providers, non-streaming `provider_chat`, command approval/execute, MCP and REST handlers.
+- `termux/codein-bootstrap.sh`: downloads server from `main` and restarts it.
+- `app/src/main/java/com/example/ui/AgentTracePanels.kt`, `app/src/main/java/com/example/ui/components/CodeinSheets.kt`, `termux/composio_connect.py`, `.github/workflows/*.yml`, `docs/`.
+- Connection check is MCP `ping` every 12 seconds, not `initialize` + `tools/list`. Heartbeat change uses a 2-second timeout and suppresses two failures only after the first successful ping.
+- Push to `main` starts `android-ci.yml`; changes under `app/**` or workflow paths also match `android-main-build.yml`. `[skip ci]` is required to honor no-build instruction.
 
 ## Checklist
-### Server SSE
-- [ ] Add authenticated `POST /api/chat/stream` with flushed SSE JSON frames and stable events: status, token, tool_call, tool_result, approval_required, command_output, error, done.
-- [ ] Native streaming per supported provider; preserve `/api/chat` and MCP `provider_chat`.
-- [ ] Preserve tool loop, exact-command approval, iteration/time limits and stop on disconnect where practical.
-- [ ] Add stdlib tests for framing, errors, auth, legacy behavior and approval.
-### Android client/UI
-- [ ] Robust UTF-8 SSE parser (split chunks/multiple events), cancellable request, clear 401/timeout/missing-key errors.
-- [ ] Stream tokens into current chat only; prevent late events updating a changed chat.
-- [ ] Collapsible live trace panel with approval/reject/error/stop states. Stop must cancel request.
-- [ ] Add connection failure hysteresis/backoff; ping is already light; do not poll tools/list.
-### Agent Room / integration
-- [ ] Audit callbacks; simplify UI into Models, Services, Composio, Logs without removing needed advanced settings.
-- [ ] One connection status and useful last error; never show credential values.
-- [ ] Verify Composio flow before edits; defer key migration until safe/tested.
-### Finish and commits
-- [ ] Update Termux bootstrap/docs for protocol changes.
-- [ ] Run only Python/unit/bash checks. Do not run Gradle, APK build, release or workflow.
-- [ ] Review diff for approval bypass, Hero/Zero/Dolphin edits, identifiers/signing changes and secrets.
-- [ ] Update this checklist and workspace handoff with tests/commit hashes.
-- [ ] Small English scoped commits on `main`, append `[skip ci]`, push; verify no Actions run.
 
-## Order
-1. Server SSE + tests. 2. Android parser/stream UI. 3. Stability and approvals panel. 4. Agent Room cleanup. 5. Bootstrap/docs and review. Commit each coherent chunk.
+### 1. Establish baseline / handoff
+- [x] Check branch, recent commit, worktree and remotes.
+- [x] Inspect current connection check, server chat loop, command approval and workflow triggers.
+- [x] Keep this checklist in project and refresh before/after each commit.
 
-## Acceptance
-Incremental tokens; legacy API works; transient ping failures do not flap; stop cancels; shell remains approval-gated; Hero/Zero/Dolphin/app id unchanged; lightweight tests only; no builds.
+### 2. Termux server streaming
+- [ ] Add authenticated `POST /api/chat/stream` with flushed SSE JSON frames and stable event schema (`status`, `token`, `tool_call`, `tool_result`, `approval_required`, `command_output`, `error`, `done`).
+- [ ] Add provider-native streaming only where supported; preserve existing `/api/chat` and MCP `provider_chat` behavior.
+- [ ] Retain provider tool loops and exact-command approval gate; never execute a command just because it was proposed.
+- [ ] Bound iterations and total time; detect client disconnect and stop upstream work when practical.
+- [ ] Add focused stdlib unit tests for SSE framing, errors, auth and approval behavior.
+
+### 3. Android streaming and connection stability
+- [ ] Implement robust SSE line/event parsing (partial chunks, UTF-8, multiple events) and cancelable HTTP request in `TermuxBridgeClient`.
+- [ ] Connect token events to active chat UI; prevent late events updating a different/cleared chat.
+- [ ] Add collapsed live trace panel with pending approval, approve/reject, error and stop states.
+- [x] Add failure hysteresis and short ping; ping is already lightweight, so do not add tools/list polling.
+- [ ] Keep handling 401, missing provider key, timeout and old Termux server explicit.
+
+### 4. Agent Room UI / integration
+- [ ] Audit controls and callbacks before reorganizing `TermuxAgentRoomDialog`.
+- [ ] Simplify into Models, Services, Composio and Logs sections; keep advanced MCP settings accessible if used.
+- [ ] Use one connection state with last useful error; keep credential values hidden.
+- [ ] Verify Composio Connect endpoints/tools against current code/docs before modifying OAuth behavior.
+- [ ] Do not remove `COMPOSIO_API_KEY` from builds until a tested migration/replacement preserves existing users. No secret migration by assumption.
+
+### 5. Docs, verification, commits
+- [ ] Update bootstrap/docs for server protocol changes; existing installer fetches server from `main`.
+- [ ] Run Python/unit/bash checks only; do not run Gradle, APK build, release or workflow.
+- [ ] Review full diff for approval bypass, unintended Hero/Zero/Dolphin changes, identifier/signing changes and secrets.
+- [ ] Update this checklist and `outputs/codein-handoff.md` with facts, tests and commit hashes.
+- [ ] Commit each coherent chunk on `main`, English scoped message plus `[skip ci]`; push without starting Actions.
+
+## Recommended order
+1. Finish this handoff and make an initial docs commit.
+2. Implement and test server SSE while preserving legacy endpoint and approval rules.
+3. Implement Android SSE parser/client and stream UI.
+4. Stabilize connection indicator and add live trace/approval UX.
+5. Simplify Agent Room; update Termux bootstrap/docs.
+6. Final review, lightweight tests, update both handoffs, commit/push each chunk.
+
+## Acceptance criteria
+- Provider tokens appear incrementally; old endpoints still work.
+- A transient heartbeat failure does not flap status; idle bridge remains responsive.
+- Stopping cancels streaming; command execution still requires explicit approval.
+- Hero/Zero/Dolphin and application identifiers remain unchanged.
+- Lightweight tests pass; no build/release/Actions run; commits are recorded below.
 
 ## Commits / verification
-- Handoff commit pending verification.
+- `738a8d10eb550249df0d3e2fd00e45ce791736d6` — handoff committed to GitHub `main` (`[skip ci]`).
+- Heartbeat hardening: local changes pending GitHub commit.
+- No tests/build/release/Actions run.
