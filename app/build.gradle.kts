@@ -11,7 +11,10 @@ val releaseStorePassword = System.getenv("STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("KEY_ALIAS")
 val releaseKeyPassword = System.getenv("KEY_PASSWORD")
 val hasReleaseKey = listOf(keyStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
-val composioWorkerUrl = providers.gradleProperty("COMPOSIO_WORKER_URL").orElse(providers.environmentVariable("COMPOSIO_WORKER_URL")).getOrElse("")
+val composioWorkerUrl = providers.gradleProperty("COMPOSIO_WORKER_URL").orNull
+    ?.takeIf { it.isNotBlank() }
+    ?: providers.environmentVariable("COMPOSIO_WORKER_URL").orNull?.takeIf { it.isNotBlank() }
+    ?: "https://codein.shen-zero.workers.dev"
 val escapedComposioWorkerUrl = composioWorkerUrl.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {

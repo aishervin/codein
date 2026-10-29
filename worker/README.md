@@ -17,7 +17,7 @@ Generate the signing secret locally with `openssl rand -hex 32`; never commit ei
 npx wrangler deploy
 ```
 
-The Worker URL is the `workers.dev` URL printed by Wrangler. Set that non-secret URL as the GitHub Actions variable `COMPOSIO_WORKER_URL` before producing a public APK. No Composio key belongs in Android build configuration.
+The Worker URL is the `workers.dev` URL printed by Wrangler. Android builds default to `https://codein.shen-zero.workers.dev`; set the non-secret GitHub Actions variable `COMPOSIO_WORKER_URL` only to override that address. No Composio key belongs in Android build configuration.
 
 ## API
 
@@ -27,6 +27,6 @@ The Worker URL is the `workers.dev` URL printed by Wrangler. Set that non-secret
 - `POST /v1/execute` executes one tool in that same verified session.
 - `GET /health` is a non-secret health check.
 
-Cloudflare rate-limit bindings cap identity creation and authenticated requests. A persistent session keeps authorization links and per-user session state valid across tool calls; the Worker checks ownership against Composio before using the session.
+Cloudflare rate-limit bindings cap identity creation at 5 requests per 60 seconds and authenticated requests at 90 per 60 seconds. A persistent session keeps authorization links and per-user session state valid across tool calls; the Worker checks ownership against Composio before using the session.
 
 This initial release uses anonymous per-install identities. Connections are not recoverable after deleting the Termux data directory or moving to a new installation. Adding account sign-in and identity recovery requires a real Codein account system.
