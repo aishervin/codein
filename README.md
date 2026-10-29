@@ -1,4 +1,6 @@
 <div align="center">
+  <img src="app/src/main/res/drawable/shen_logo.png" alt="Original SHΞN emblem" width="88" />
+  <br />
   <img src="docs/assets/codin-neon-header.svg" alt="CODΞiN™ — SHΞN™ Coder" width="100%" />
 </div>
 
