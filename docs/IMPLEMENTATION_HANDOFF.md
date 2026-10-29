@@ -9,7 +9,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Heartbeat now uses a 2-second MCP ping and suppresses two transient errors after first successful ping.
 - [x] Authenticated SSE endpoint streams OpenAI-compatible providers; old `/api/chat` and MCP route remain.
 - [x] Android client parses SSE frames, streams tokens to active chat, shows collapsible Agent trace, falls back for old server/unsupported providers, and cancels on stop/clear/history switch.
-- [x] Cancellation now disconnects the HTTP socket immediately so the server can stop upstream streaming; this follow-up is not yet committed.
+- [x] Cancellation disconnects the HTTP socket immediately so the server can stop upstream streaming.
 - [x] SSE framing/auth and OpenAI tool-delta tests added; all seven Termux tests pass; Python syntax check passes.
 - [x] Kotlin changes are committed but not compiled (build prohibited); Gemini/Anthropic native streaming remains unimplemented and falls back to legacy chat.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
@@ -88,6 +88,6 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `0029e1203952fb1600d14e1f8aace3bbc77563e5` — OpenAI-compatible SSE server + tests committed to GitHub `main` (`[skip ci]`).
 - `ce1b510f02d070a1416e0372402ecafe18bacc6d` — Android SSE client/UI and server safety/time limit committed to GitHub `main` (`[skip ci]`).
 - `c427af68d83a8e889014be25e6f8e1d4bd7f300a` — previous handoff commit; exact SHA had 0 workflow runs.
-- Cancellation follow-up: local change pending GitHub commit; Kotlin remains uncompiled.
+- `0236614d6504d9a6bfcdec327b61ce06e31f161e` — immediate SSE cancellation added; its exact SHA has 0 workflow runs. Kotlin remains uncompiled.
 - `python3 -m unittest termux/test_mcp.py` — 7 tests passed; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
 - `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.
