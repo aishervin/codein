@@ -33,6 +33,7 @@ Tools exposed by the server:
 - `agent_room_get`: read workspace state, recent events, sessions, skills, and credential names (not values)
 - `credentials_list`: list local credential names
 - `provider_models_list`: query a provider's current model list using a user-supplied key; the key is not persisted by this tool
+- `provider_model_test`: send one short, tool-free text probe to a model; only a real marker response passes, and the optional test key is not saved
 - `provider_chat`: send a model turn to the configured provider; the provider adapter exposes local MCP tools to models that support native tool calls
 
 The local server validates a bearer token on every request. MCP tool execution is powerful: commands run with the Termux user's permissions, so only use this local endpoint for actions authorized by the user. Never commit `~/.codein` or reveal its token/key values.

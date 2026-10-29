@@ -119,8 +119,8 @@ with urlopen(request, timeout=5) as response:
     result = json.load(response).get("result", {})
 version = result.get("serverInfo", {}).get("version", "")
 parts = [int(part) if part.isdigit() else 0 for part in version.split(".")]
-if (parts + [0, 0])[:3] < [1, 2, 0]:
-    raise SystemExit("[Codein] MCP bridge update verification failed; expected version 1.2.0 or newer.")
+if (parts + [0, 0])[:3] < [1, 3, 0]:
+    raise SystemExit("[Codein] MCP bridge update verification failed; expected version 1.3.0 or newer.")
 print("[Codein] MCP bridge verified: version " + version)
 PY
 

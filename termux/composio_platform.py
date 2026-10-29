@@ -9,6 +9,12 @@ from urllib.request import Request, urlopen
 CONFIG_PATH = Path.home() / ".codein" / "keys" / "composio_platform.json"
 
 
+class WorkerAuthorizationError(RuntimeError):
+    def __init__(self, status):
+        self.status = status
+        super().__init__("Composio Worker authorization failed. Reconnect the service in Codein.")
+
+
 def worker_url(value):
     parsed = urlparse(str(value or "").strip().rstrip("/"))
     if parsed.scheme != "https" or not parsed.hostname or not parsed.hostname.endswith(".workers.dev"):
@@ -29,7 +35,7 @@ def request(base_url, path, token=None, payload=None, timeout=30):
             raw = response.read(2_000_000).decode("utf-8", "replace")
     except HTTPError as exc:
         if exc.code in (401, 403):
-            raise RuntimeError("Composio Worker authorization failed. Reconnect the service in Codein.") from None
+            raise WorkerAuthorizationError(exc.code) from None
         if exc.code == 429:
             raise RuntimeError("Composio Worker is rate-limiting requests. Try again shortly.") from None
         raise RuntimeError("Composio Worker request failed (HTTP " + str(exc.code) + ").") from None
@@ -50,16 +56,41 @@ def configure(url):
     base_url = worker_url(url)
     current = read_config()
     reused = current.get("worker_url") == base_url and current.get("token")
-    if reused:
-        token = current["token"]
-        user_id = current.get("user_id", "")
-    else:
+
+    def new_identity():
         identity = request(base_url, "/v1/bootstrap", timeout=20)
         token = str(identity.get("token") or "")
         user_id = str(identity.get("user_id") or "")
         if not token or not user_id.startswith("codein_"):
             raise RuntimeError("Codein Worker could not create an installation identity.")
-    session = request(base_url, "/v1/session", token, {"session_id": current.get("session_id") if reused else None}, timeout=45)
+        return token, user_id
+
+    if reused:
+        token = current["token"]
+        user_id = current.get("user_id", "")
+        session_payload = {"session_id": current.get("session_id")}
+        try:
+            session = request(base_url, "/v1/session", token, session_payload, timeout=45)
+        except WorkerAuthorizationError as error:
+            if error.status == 403 and session_payload["session_id"]:
+                try:
+                    session = request(base_url, "/v1/session", token, {"session_id": None}, timeout=45)
+                except WorkerAuthorizationError as retry_error:
+                    if retry_error.status != 401:
+                        raise
+                    token, user_id = new_identity()
+                    reused = False
+                    session = request(base_url, "/v1/session", token, {"session_id": None}, timeout=45)
+            elif error.status == 401:
+                token, user_id = new_identity()
+                reused = False
+                session = request(base_url, "/v1/session", token, {"session_id": None}, timeout=45)
+            else:
+                raise
+    else:
+        token, user_id = new_identity()
+        session = request(base_url, "/v1/session", token, {"session_id": None}, timeout=45)
+
     session_id = str(session.get("session_id") or "")
     if not session_id.startswith("trs_"):
         raise RuntimeError("Codein Worker could not create a private Composio session.")

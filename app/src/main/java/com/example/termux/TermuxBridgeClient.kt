@@ -45,13 +45,13 @@ class TermuxBridgeClient(context: Context) {
         val tools = mcpRequest("tools/list", JSONObject())
         val toolArray = tools.optJSONArray("tools") ?: JSONArray()
         val toolNames = (0 until toolArray.length()).mapNotNull { toolArray.optJSONObject(it)?.optString("name") }.toSet()
-        val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_chat", "composio_platform_configure", "composio_tools_refresh")
+        val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_model_test", "provider_chat", "composio_platform_configure", "composio_tools_refresh")
         val missing = requiredTools - toolNames
         check(missing.isEmpty()) {
             "پل MCP ترموکس قدیمی است (ابزارهای لازم را ندارد). از تب سرویس‌ها دستور به‌روزرسانی را کپی و در Termux اجرا کن."
         }
         val serverVersion = init.optJSONObject("serverInfo")?.optString("version").orEmpty()
-        check(versionAtLeast(serverVersion, "1.2.0")) {
+        check(versionAtLeast(serverVersion, "1.3.0")) {
             "نسخهٔ پل MCP ترموکس قدیمی است ($serverVersion). در تب سرویس‌ها دستور به‌روزرسانی را کپی و در Termux اجرا کن؛ کلیدها و توکن قبلی حفظ می‌شوند."
         }
         return JSONObject()
@@ -132,6 +132,13 @@ class TermuxBridgeClient(context: Context) {
         val result = mcpTool("provider_models_saved_list", JSONObject().put("provider", provider), 45)
         val array = result.optJSONArray("models") ?: JSONArray()
         return (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank)
+    }
+
+    /** Verify one model with a short text prompt; a supplied key is never saved. */
+    suspend fun testProviderModel(provider: String, model: String, testApiKey: String = ""): JSONObject {
+        val arguments = JSONObject().put("provider", provider).put("model", model)
+        if (testApiKey.isNotBlank()) arguments.put("test_api_key", testApiKey)
+        return mcpTool("provider_model_test", arguments, 45)
     }
 
     /** Run provider chat through the local MCP server; its tool loop dispatches native MCP tools. */

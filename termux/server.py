@@ -12,7 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
-SERVER_VERSION="1.2.0"
+SERVER_VERSION="1.3.0"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -198,6 +198,7 @@ def mcp_tools_catalog():
         {"name":"state_update","description":"Update shared Agent Room task state using a partial JSON object.","inputSchema":{"type":"object","properties":{"fields":{"type":"object"}},"required":["fields"]}},
         {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}},
         {"name":"provider_models_saved_list","description":"Query a provider model catalog using the API key already saved in the local credential vault.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)}},"required":["provider"]}},
+        {"name":"provider_model_test","description":"Send one short text-generation probe to a single provider model. The optional test key is used only for this request and is never saved. This probe has no local tools.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"test_api_key":{"type":"string"}},"required":["provider","model"]}},
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
         {"name":"opencode_manage","description":"Manage the optional local OpenCode API: install/start, check status, restart, or stop. This does not replace the selected Codein chat provider.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","start","status","restart","stop"]}},"required":["action"]}}
     ]
@@ -324,6 +325,24 @@ def dispatch_mcp_tool(name, args):
         status,payload=discover_provider_models(pid,api_key)
         if status!=200: raise RuntimeError(str(payload.get("error","Model lookup failed"))+(": "+str(payload.get("detail")) if payload.get("detail") else ""))
         return payload
+    if name=="provider_model_test":
+        pid=str(args.get("provider","")).strip().lower()
+        model=str(args.get("model","")).strip()
+        if pid not in PROVIDERS: raise ValueError("Unsupported provider")
+        if not model or len(model)>300: raise ValueError("A valid model ID is required")
+        marker="CODEIN_MODEL_READY"
+        status,result=provider_chat({
+            "provider":pid,
+            "model":model,
+            "messages":[{"role":"user","content":"Reply with exactly this text and nothing else: "+marker}],
+            "test_api_key":args.get("test_api_key"),
+            "model_probe":True,
+            "timeout":18,
+        })
+        answer=str(result.get("content") or "")
+        if status!=200 or not result.get("ok") or marker not in answer:
+            raise RuntimeError("Model did not pass the live text-response test")
+        return {"ok":True,"verified":True,"provider":pid,"model":model}
     if name=="provider_chat":
         status,result=provider_chat(args)
         return result
@@ -512,7 +531,7 @@ def provider_chat(data, emit=None, cancel=None):
     provider=PROVIDERS.get(pid)
     if not provider: return 400,{"ok":False,"error":"Unknown provider","providers":list(PROVIDERS)}
     key_data=readj(KEYS/(provider["key"]+".json"),{})
-    api_key=str(key_data.get("value","")).strip()
+    api_key=str(data.get("test_api_key") or key_data.get("value","")).strip()
     if not api_key: return 428,{"ok":False,"error":"missing_api_key","provider":pid,"provider_name":provider["name"],"credential_name":provider["key"],"message":"API key is not configured. Ask the user to provide it in this chat; store it in the local Termux vault before retrying."}
     model=str(data.get("model") or provider["default_model"]).strip()
     messages=data.get("messages") or []
@@ -527,9 +546,9 @@ def provider_chat(data, emit=None, cancel=None):
     system=str(data.get("system",""))[:30000]
     timeout=max(10,min(int(data.get("timeout",120)),180))
     deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",300)),300)) if emit else None
-    # Provider-native model calls receive only local action tools. Avoid recursion
-    # and don't ask the model to invent API keys for provider discovery.
-    tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve","opencode_manage","composio_platform_configure")]
+    model_probe=bool(data.get("model_probe"))
+    # Probes must not expose action tools or let a model trigger local side effects.
+    tool_catalog=[] if model_probe else [tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","provider_models_saved_list","provider_model_test","credential_save","termux_command_approve","opencode_manage","composio_platform_configure")]
     try:
         if cancel: cancel.check()
         if provider["kind"]=="gemini":
@@ -545,7 +564,8 @@ def provider_chat(data, emit=None, cancel=None):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
-                payload={"contents":contents,"generationConfig":{"temperature":0.3},"tools":[{"functionDeclarations":function_declarations}]}
+                payload={"contents":contents,"generationConfig":{"temperature":0 if model_probe else 0.3,"maxOutputTokens":24} if model_probe else {"temperature":0.3},"tools":[{"functionDeclarations":function_declarations}]}
+                if model_probe: payload.pop("tools",None)
                 if system: payload["systemInstruction"]={"parts":[{"text":system}]}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
@@ -593,7 +613,8 @@ def provider_chat(data, emit=None, cancel=None):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
-                payload={"model":model,"max_tokens":4096,"messages":msgs,"tools":tools,"stream":bool(emit)}
+                payload={"model":model,"max_tokens":24 if model_probe else 4096,"messages":msgs,"stream":bool(emit)}
+                if not model_probe: payload["tools"]=tools
                 if system_parts: payload["system"]="\n\n".join(system_parts)
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
@@ -635,7 +656,12 @@ def provider_chat(data, emit=None, cancel=None):
                 if emit and time.monotonic()>deadline:
                     return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
-                payload={"model":model,"messages":msgs,"stream":bool(emit),"tools":tools,"tool_choice":"auto"}
+                payload={"model":model,"messages":msgs,"stream":bool(emit)}
+                if model_probe:
+                    payload["max_completion_tokens" if pid=="openai" else "max_tokens"]=24
+                    if pid!="openai": payload["temperature"]=0
+                else:
+                    payload.update({"tools":tools,"tool_choice":"auto"})
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
                 with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:

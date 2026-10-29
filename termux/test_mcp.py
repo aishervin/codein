@@ -376,6 +376,42 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(result["detail"],"This model is currently experiencing high demand.")
         self.assertNotIn('"error"',result["detail"])
 
+    def test_provider_model_probe_uses_ephemeral_key_without_action_tools(self):
+        response=io.BytesIO(json.dumps({"choices":[{"message":{"content":"CODEIN_MODEL_READY"}}]}).encode())
+        with patch.object(mcp_server,"readj",return_value={}), \
+                patch.object(mcp_server,"mcp_tools_catalog",side_effect=AssertionError("probe must not load tools")), \
+                patch.object(mcp_server,"urlopen",return_value=response) as urlopen_mock:
+            status,result=mcp_server.provider_chat({
+                "provider":"openai",
+                "model":"test-model",
+                "messages":[{"role":"user","content":"Reply with exactly CODEIN_MODEL_READY"}],
+                "test_api_key":"probe-only-key",
+                "model_probe":True,
+                "timeout":18,
+            })
+        self.assertEqual(status,200)
+        self.assertEqual(result["content"],"CODEIN_MODEL_READY")
+        request=urlopen_mock.call_args.args[0]
+        payload=json.loads(request.data)
+        self.assertEqual(request.get_header("Authorization"),"Bearer probe-only-key")
+        self.assertEqual(payload["max_completion_tokens"],24)
+        self.assertNotIn("tools",payload)
+        self.assertNotIn("tool_choice",payload)
+
+    def test_provider_model_test_only_accepts_a_real_marker_response(self):
+        with patch.object(mcp_server,"provider_chat",return_value=(200,{"ok":True,"content":"CODEIN_MODEL_READY"})) as chat:
+            result=mcp_server.dispatch_mcp_tool("provider_model_test",{
+                "provider":"openai","model":"test-model","test_api_key":"probe-only-key"
+            })
+        self.assertTrue(result["verified"])
+        self.assertNotIn("probe-only-key",json.dumps(result))
+        self.assertTrue(chat.call_args.args[0]["model_probe"])
+        self.assertEqual(chat.call_args.args[0]["test_api_key"],"probe-only-key")
+
+        with patch.object(mcp_server,"provider_chat",return_value=(200,{"ok":True,"content":"A different response"})):
+            with self.assertRaisesRegex(RuntimeError,"did not pass"):
+                mcp_server.dispatch_mcp_tool("provider_model_test",{"provider":"openai","model":"test-model"})
+
     def test_native_provider_tool_calls_keep_command_approval_gate(self):
         anthropic_events=[
             ("content_block_start",{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"termux_exec","input":{}}}),
@@ -408,13 +444,13 @@ class McpTransportTests(unittest.TestCase):
         })
         self.assertEqual(status, 200)
         self.assertEqual(response["result"]["protocolVersion"], "2025-03-26")
-        self.assertEqual(response["result"]["serverInfo"]["version"], "1.2.0")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "1.3.0")
         self.assertIn("logging", response["result"]["capabilities"])
         status, _ = self.rpc("notifications/initialized", request_id=None)
         self.assertEqual(status, 202)
         _, response = self.rpc("tools/list")
         names = {tool["name"] for tool in response["result"]["tools"]}
-        self.assertTrue({"termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_chat", "composio_platform_configure"} <= names)
+        self.assertTrue({"termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_model_test", "provider_chat", "composio_platform_configure"} <= names)
 
     def test_composio_platform_configuration_never_returns_install_token(self):
         with patch.object(mcp_server.composio_platform, "configure", return_value={"ok":True,"user_id":"codein_0123456789abcdef0123456789abcdef","reused":False}), \
@@ -422,6 +458,60 @@ class McpTransportTests(unittest.TestCase):
             result = self.call_tool("composio_platform_configure", {"worker_url":"https://codein.workers.dev"})
         self.assertTrue(result["ok"])
         self.assertNotIn("token", result)
+
+    def test_composio_configuration_replaces_rejected_installation_identity(self):
+        platform = mcp_server.composio_platform
+        old_config = {
+            "worker_url":"https://codein.workers.dev",
+            "token":"rejected-token",
+            "user_id":"codein_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "session_id":"trs_old",
+        }
+        identity = {
+            "token":"replacement-token",
+            "user_id":"codein_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        }
+        with patch.object(platform, "read_config", return_value=old_config), \
+                patch.object(platform, "request", side_effect=[
+                    platform.WorkerAuthorizationError(401), identity, {"session_id":"trs_new"}
+                ]) as request_mock, \
+                patch.object(platform, "save_config") as save_mock:
+            result = platform.configure("https://codein.workers.dev")
+
+        self.assertFalse(result["reused"])
+        self.assertEqual(request_mock.call_args_list[1].args[1], "/v1/bootstrap")
+        self.assertEqual(request_mock.call_args_list[2].args[1:], (
+            "/v1/session", "replacement-token", {"session_id":None}
+        ))
+        self.assertEqual(save_mock.call_args.args[0], {
+            "worker_url":"https://codein.workers.dev",
+            "token":"replacement-token",
+            "user_id":"codein_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "session_id":"trs_new",
+        })
+
+    def test_composio_configuration_replaces_mismatched_session_without_changing_identity(self):
+        platform = mcp_server.composio_platform
+        config = {
+            "worker_url":"https://codein.workers.dev",
+            "token":"valid-install-token",
+            "user_id":"codein_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "session_id":"trs_wrong_owner",
+        }
+        with patch.object(platform, "read_config", return_value=config), \
+                patch.object(platform, "request", side_effect=[
+                    platform.WorkerAuthorizationError(403), {"session_id":"trs_recovered"}
+                ]) as request_mock, \
+                patch.object(platform, "save_config") as save_mock:
+            result = platform.configure("https://codein.workers.dev")
+
+        self.assertTrue(result["reused"])
+        self.assertEqual(request_mock.call_count, 2)
+        self.assertEqual(request_mock.call_args_list[1].args[1:], (
+            "/v1/session", "valid-install-token", {"session_id":None}
+        ))
+        self.assertEqual(save_mock.call_args.args[0]["token"], "valid-install-token")
+        self.assertEqual(save_mock.call_args.args[0]["session_id"], "trs_recovered")
 
     def test_composio_platform_identity_is_used_for_catalog_and_tool_calls(self):
         config={"worker_url":"https://codein.workers.dev","token":"local-install-token","user_id":"codein_0123456789abcdef0123456789abcdef"}
