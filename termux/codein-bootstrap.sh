@@ -15,8 +15,10 @@ STAGE="$(mktemp -d "$ROOT/.update.XXXXXX")"
 cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 fetch() {
-  local remote="$1" target="$2"
-  local staged="$STAGE/$remote"
+  local remote target staged
+  remote="$1"
+  target="$2"
+  staged="$STAGE/$remote"
   mkdir -p "$(dirname "$staged")"
   curl --retry 3 --retry-delay 1 --fail --silent --show-error "$RAW/$remote" -o "$staged"
   printf '%s|%s\n' "$remote" "$target" >> "$STAGE/install.list"
