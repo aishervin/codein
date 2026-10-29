@@ -1,7 +1,7 @@
 <div align="center">
   <img src="app/src/main/res/drawable/shen_logo.png" alt="Original SHΞN emblem" width="88" />
   <br />
-  <img src="docs/assets/codin-neon-header.svg" alt="CODΞiN™ — SHΞN™ Coder" width="100%" />
+  <img src="docs/assets/codin-neon-header-v2.svg" alt="CODΞiN™ — SHΞN™ Coder" width="100%" />
 </div>
 
 <p dir="rtl" align="center"><strong>یک فضای متمرکز برای گفتگو، ایده‌پردازی و ساختن.</strong></p>
