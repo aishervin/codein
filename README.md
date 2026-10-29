@@ -1,4 +1,4 @@
-<div dir="ltr" align="center">
+<div dir="ltr" align="center"> 
   <img src="https://raw.githubusercontent.com/aishervin/codein/main/app/src/main/res/drawable/shen_logo.png" alt="CODΞiN logo" width="128" />
   <h1>CODΞiN™</h1>
   <p><strong>SHΞN™ Coder</strong></p>
