@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">CODΞiN™ — SHΞN™ Coder</title>
+  <desc id="desc">The original SHΞN emblem with a warm orange, animated neural-circuit schematic on a charcoal field.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101012"/>
+      <stop offset="0.55" stop-color="#17130f"/>
+      <stop offset="1" stop-color="#0d0e10"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" x2="1">
+      <stop offset="0" stop-color="#ff7a00" stop-opacity="0.08"/>
+      <stop offset="0.55" stop-color="#ff7a00" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#ffc477" stop-opacity="0.32"/>
+    </linearGradient>
+    <radialGradient id="warm">
+      <stop offset="0" stop-color="#ff7a00" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#ff7a00" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#d7a877" stroke-opacity="0.055" stroke-width="1"/>
+    </pattern>
+    <clipPath id="panel"><rect width="1200" height="340" rx="22"/></clipPath>
+  </defs>
+  <g clip-path="url(#panel)">
+    <rect width="1200" height="340" fill="url(#bg)"/>
+    <rect width="1200" height="340" fill="url(#grid)"/>
+    <ellipse cx="1010" cy="174" rx="330" ry="250" fill="url(#warm)"/>
+    <path d="M0 20H1200M0 320H1200" stroke="#ff9a32" stroke-opacity="0.22"/>
+    <path d="M604 42V298" stroke="#ff9a32" stroke-opacity="0.22" stroke-dasharray="2 8"/>
+
+    <circle cx="144" cy="132" r="77" fill="#ff7a00" fill-opacity="0.055"/>
+    <circle cx="144" cy="132" r="66" fill="#151515" stroke="#ff8a1b" stroke-opacity="0.64" stroke-width="1.5"/>
+    <circle cx="144" cy="132" r="59" fill="none" stroke="#ffc477" stroke-opacity="0.24" stroke-dasharray="2 6"/>
+    <image x="92" y="80" width="104" height="104" preserveAspectRatio="xMidYMid meet" href="https://raw.githubusercontent.com/aishervin/codein/main/app/src/main/res/drawable/shen_logo.png" xlink:href="https://raw.githubusercontent.com/aishervin/codein/main/app/src/main/res/drawable/shen_logo.png"/>
+    <circle cx="144" cy="55" r="3" fill="#ffc477" filter="url(#glow)">
+      <animate attributeName="opacity" values="0.35;1;0.35" dur="2.8s" repeatCount="indefinite"/>
+    </circle>
+
+    <text x="260" y="113" fill="#f5f2ee" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700" letter-spacing="1.2">CODΞiN<tspan fill="#ff9a32" font-size="17" baseline-shift="super">™</tspan></text>
+    <text x="263" y="151" fill="#ff9a32" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" letter-spacing="3">SHΞN™ CODER</text>
+    <text x="263" y="185" fill="#c8c0b7" font-family="Arial, Helvetica, sans-serif" font-size="14" letter-spacing="1.8">PRIVATE AI  /  ANDROID  /  LOCAL MCP</text>
+    <path d="M263 211H524" stroke="#6a4930" stroke-width="1"/>
+    <path d="M263 211H420" stroke="#ff7a00" stroke-width="2" filter="url(#glow)">
+      <animate attributeName="stroke-dasharray" values="0 261;110 151;0 261" dur="4.5s" repeatCount="indefinite"/>
+    </path>
+    <circle cx="263" cy="249" r="4" fill="#ff7a00" filter="url(#glow)">
+      <animate attributeName="opacity" values="1;0.35;1" dur="1.8s" repeatCount="indefinite"/>
+    </circle>
+    <text x="277" y="253" fill="#e7d9c9" font-family="Arial, Helvetica, sans-serif" font-size="12" letter-spacing="2">THINK DEEP. BUILD WITH INTENT.</text>
+    <text x="263" y="297" fill="#8c8278" font-family="monospace" font-size="10" letter-spacing="1.4">SYSTEM READY <tspan fill="#ff9a32">//</tspan> v1.3.0 <tspan fill="#ff9a32">//</tspan> SHΞЯVIN™</text>
+
+    <g fill="none" stroke="url(#line)" stroke-width="1.35">
+      <path d="M645 65H750L780 95H883L916 62H1090L1125 97H1200"/>
+      <path d="M642 112H705L742 149H833L864 118H970L1003 151H1141L1170 122H1200"/>
+      <path d="M642 205H724L754 175H846L885 214H972L1012 175H1116L1149 209H1200"/>
+      <path d="M642 258H769L797 230H906L934 258H1037L1073 222H1172L1200 250"/>
+      <path d="M702 65V91M742 112V149M833 149V180M916 62V42M970 118V84M1012 175V144M906 258V286M1073 222V265M1141 151V178" stroke-opacity="0.62"/>
+      <path d="M679 80h18m-9-9v18M1071 115h18m-9-9v18M776 195h18m-9-9v18M1151 274h18m-9-9v18" stroke-opacity="0.5"/>
+    </g>
+    <g fill="#ffc477" filter="url(#glow)">
+      <circle cx="750" cy="65" r="3"/><circle cx="883" cy="95" r="3"/><circle cx="1090" cy="62" r="3"/>
+      <circle cx="705" cy="112" r="3"/><circle cx="864" cy="149" r="3"/><circle cx="1003" cy="118" r="3"/>
+      <circle cx="724" cy="205" r="3"/><circle cx="885" cy="175" r="3"/><circle cx="1116" cy="175" r="3"/>
+      <circle cx="769" cy="258" r="3"/><circle cx="934" cy="230" r="3"/><circle cx="1172" cy="222" r="3"/>
+    </g>
+    <g fill="#ff7a00">
+      <circle cx="780" cy="95" r="2"><animate attributeName="r" values="2;4;2" dur="2.2s" repeatCount="indefinite"/></circle>
+      <circle cx="970" cy="118" r="2"><animate attributeName="r" values="2;4;2" dur="2.7s" repeatCount="indefinite"/></circle>
+      <circle cx="1012" cy="175" r="2"><animate attributeName="r" values="2;4;2" dur="2.4s" repeatCount="indefinite"/></circle>
+      <circle cx="1073" cy="222" r="2"><animate attributeName="r" values="2;4;2" dur="3s" repeatCount="indefinite"/></circle>
+    </g>
+    <path d="M646 65H750L780 95H883L916 62H1090L1125 97H1200" fill="none" stroke="#ffd09c" stroke-width="2.4" stroke-dasharray="3 420" filter="url(#glow)">
+      <animate attributeName="stroke-dashoffset" from="0" to="-423" dur="7s" repeatCount="indefinite"/>
+    </path>
+    <text x="640" y="305" fill="#9b7c5e" font-family="monospace" font-size="9" letter-spacing="2">MCP / SIGNAL PATH <tspan fill="#ff9a32">•</tspan> LOCAL-FIRST <tspan fill="#ff9a32">•</tspan> HUMAN APPROVAL</text>
+  </g>
+</svg>
