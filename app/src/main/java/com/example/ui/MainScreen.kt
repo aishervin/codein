@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -335,7 +336,8 @@ private fun MainChatScreen(
     var isStreaming by remember { mutableStateOf(false) }
     var activeAnswer by remember { mutableStateOf("") }
     var agentRequestGeneration by remember { mutableStateOf(0) }
-    var liveAgentEvents by remember { mutableStateOf(emptyList<String>()) }
+    var liveAgentEvents by remember { mutableStateOf(emptyList<AgentTraceEvent>()) }
+    var agentStreamStartedAt by remember { mutableStateOf(0L) }
     var activeAgentJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var rawModelAnswer by remember { mutableStateOf("") }
     var suppressDirectiveOutput by remember { mutableStateOf(false) }
@@ -467,6 +469,7 @@ private fun MainChatScreen(
         activeAgentJob?.cancel()
         activeAgentJob = null
         activeAnswer = ""
+        liveAgentEvents = (liveAgentEvents + AgentTraceEvent("cancelled", "استریم به درخواست کاربر متوقف شد.")).takeLast(60)
         isStreaming = false
     }
 
@@ -516,16 +519,41 @@ private fun MainChatScreen(
                 messages.add(ChatMessage(user = false, text = "برای استفاده از ${selectedModel.suffix}، یک‌بار از آیکون >_ پل Termux را راه‌اندازی و متصل کن. بعد از اتصال، درخواست مستقیم به سرویس انتخاب‌شده فرستاده می‌شود."))
                 return
             }
+            agentStreamStartedAt = SystemClock.elapsedRealtime()
+            liveAgentEvents = listOf(AgentTraceEvent("waiting", "درخواست ارسال شد؛ آماده‌سازی اتصال به مدل"))
             activeAgentJob = agentScope.launch {
+                var firstTokenSeen = false
                 runCatching {
                     termuxClient.chatStream(selectedProviderId, selectedModelId, requestMessages, effectiveSystemPrompt) { event ->
                         if (requestGeneration == agentRequestGeneration) {
                             when (event.optString("type")) {
-                                "token" -> activeAnswer += event.optString("text")
-                                "status" -> liveAgentEvents = (liveAgentEvents + "در حال اتصال به سرویس مدل…").takeLast(60)
-                                "tool_call" -> liveAgentEvents = (liveAgentEvents + "اجرای ابزار: " + event.optString("name")).takeLast(60)
-                                "tool_result" -> liveAgentEvents = (liveAgentEvents + "پاسخ ابزار: " + event.optString("summary").take(220)).takeLast(60)
-                                "approval_required" -> liveAgentEvents = (liveAgentEvents + "فرمان برای تأیید کاربر متوقف شد.").takeLast(60)
+                                "token" -> {
+                                    activeAnswer += event.optString("text")
+                                    if (!firstTokenSeen) {
+                                        firstTokenSeen = true
+                                        liveAgentEvents = (liveAgentEvents + AgentTraceEvent("receiving", "دریافت متن پاسخ شروع شد.")).takeLast(60)
+                                    }
+                                }
+                                "status" -> {
+                                    val stage = when (event.optString("stage", event.optString("status"))) {
+                                        "starting" -> AgentTraceEvent("waiting", "درخواست به پل محلی رسید؛ اتصال به مدل در حال آماده‌سازی است.")
+                                        "waiting_provider" -> AgentTraceEvent("waiting", "در انتظار پاسخ مدل · نوبت ${event.optInt("iteration", 1)}")
+                                        "provider_response" -> AgentTraceEvent("receiving", "پاسخ مدل وصل شد؛ دریافت و پردازش آغاز شد.")
+                                        else -> null
+                                    }
+                                    if (stage != null) liveAgentEvents = (liveAgentEvents + stage).takeLast(60)
+                                }
+                                "tool_call" -> {
+                                    val name = event.optString("name")
+                                    val label = if (name == "termux_exec") "درخواست اجرای فرمان ترمینال؛ بررسی مجوز" else "شروع ابزار: $name"
+                                    liveAgentEvents = (liveAgentEvents + AgentTraceEvent("tool", label)).takeLast(60)
+                                }
+                                "tool_result" -> {
+                                    val label = if (event.optString("name") == "termux_exec") "فرمان ترمینال تمام شد · ${event.optString("summary")}" else "ابزار تمام شد · ${event.optString("summary")}"
+                                    liveAgentEvents = (liveAgentEvents + AgentTraceEvent("done", label.take(220))).takeLast(60)
+                                }
+                                "approval_required" -> liveAgentEvents = (liveAgentEvents + AgentTraceEvent("approval", "فرمان تا تأیید کاربر متوقف شد.")).takeLast(60)
+                                "done" -> liveAgentEvents = (liveAgentEvents + AgentTraceEvent("done", "پاسخ کامل شد.")).takeLast(60)
                             }
                         }
                     }
@@ -565,7 +593,7 @@ private fun MainChatScreen(
                         if (requestGeneration != agentRequestGeneration) return@onFailure
                         activeAgentJob = null
                         activeAnswer = ""
-                        liveAgentEvents = emptyList()
+                        liveAgentEvents = (liveAgentEvents + AgentTraceEvent("error", "پردازش ناموفق شد: ${error.message.orEmpty().take(160)}")).takeLast(60)
                         // Provider API errors/timeouts do not prove the local MCP bridge is down.
                         // The independent MCP health probe owns connection state.
                         if (error is com.example.termux.MissingProviderCredential) {
@@ -787,11 +815,14 @@ private fun MainChatScreen(
         persistActiveChat()
     }
 
-    LaunchedEffect(messages.size, activeAnswer.length, isStreaming) {
+    LaunchedEffect(messages.size, activeAnswer.length, isStreaming, liveAgentEvents.size, selectedModel.providerId) {
         if (messages.isNotEmpty() || activeAnswer.isNotEmpty()) {
-            val lastItem = messages.size - 1 + if (activeAnswer.isNotEmpty()) 1 else 0
+            val extraItems = (if (isStreaming) 1 else 0) +
+                (if (activeAnswer.isNotEmpty()) 1 else 0) +
+                (if (selectedModel.providerId != null && liveAgentEvents.isNotEmpty()) 1 else 0)
+            val lastItem = messages.size + extraItems - 1
             delay(32)
-            listState.animateScrollToItem(lastItem.coerceAtLeast(0), scrollOffset = 100000)
+            if (lastItem >= 0) listState.animateScrollToItem(lastItem, scrollOffset = 100000)
         }
     }
 
@@ -941,7 +972,7 @@ private fun MainChatScreen(
                                 }
                             }
                             if (selectedModel.providerId != null && liveAgentEvents.isNotEmpty()) {
-                                item { AgentLivePanel(liveAgentEvents, if (isStreaming) ::stopAgentStream else null) }
+                                item { AgentLivePanel(liveAgentEvents, isStreaming, agentStreamStartedAt, if (isStreaming) ::stopAgentStream else null) }
                             }
                          }
                          val historyFade = MaterialTheme.colorScheme.background

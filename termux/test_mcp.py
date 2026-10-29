@@ -167,6 +167,7 @@ class McpTransportTests(unittest.TestCase):
             request_payload=json.loads(requests[0][0].data)
             if provider=="anthropic": self.assertTrue(request_payload["stream"])
             self.assertIn(":streamGenerateContent?alt=sse&key=test-api-key" if provider=="gemini" else "/messages",requests[0][0].full_url)
+            self.assertEqual([event.get("stage") for event in events if event.get("type")=="status"], ["waiting_provider","provider_response"])
             self.assertIn({"type":"token","text":expected_text},events)
 
     def test_native_provider_tool_calls_keep_command_approval_gate(self):

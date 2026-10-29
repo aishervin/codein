@@ -422,14 +422,16 @@ def provider_chat(data, emit=None):
             method=":streamGenerateContent?alt=sse&key=" if emit else ":generateContent?key="
             url=provider["base_url"]+"/models/"+quote(model,safe="")+method+quote(api_key,safe="")
             headers={"Content-Type":"application/json"}
-            for _ in range(9):
+            for attempt in range(9):
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
+                if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
                 payload={"contents":contents,"generationConfig":{"temperature":0.3},"tools":[{"functionDeclarations":function_declarations}]}
                 if system: payload["systemInstruction"]={"parts":[{"text":system}]}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
                 with urlopen(request,timeout=request_timeout) as response:
                     if emit:
+                        emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_gemini_stream(response,emit,deadline)
                         model_content=message.get("provider_content") or {"role":"model","parts":[{"text":message.get("content","")}]}
                         calls=[{"name":call["function"]["name"],"args":json.loads(call["function"]["arguments"])} for call in message.get("tool_calls",[])]
@@ -466,14 +468,16 @@ def provider_chat(data, emit=None):
             tools=[{"name":tool["name"],"description":tool["description"],"input_schema":tool["inputSchema"]} for tool in tool_catalog]
             url=provider["base_url"]+"/messages"
             headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"}
-            for _ in range(9):
+            for attempt in range(9):
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
+                if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
                 payload={"model":model,"max_tokens":4096,"messages":msgs,"tools":tools,"stream":bool(emit)}
                 if system_parts: payload["system"]="\n\n".join(system_parts)
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
                 with urlopen(request,timeout=request_timeout) as response:
                     if emit:
+                        emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_anthropic_stream(response,emit,deadline)
                         blocks=message.get("provider_content") or []
                     else:
@@ -503,14 +507,16 @@ def provider_chat(data, emit=None):
             tools=[{"type":"function","function":{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]}} for tool in tool_catalog]
             url=provider["base_url"].rstrip("/")+"/chat/completions"
             headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key}
-            for _ in range(9):
+            for attempt in range(9):
                 if emit and time.monotonic()>deadline:
                     return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
+                if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
                 payload={"model":model,"messages":msgs,"stream":bool(emit),"tools":tools,"tool_choice":"auto"}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
                 with urlopen(request,timeout=request_timeout) as response:
                     if emit:
+                        emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_openai_stream(response,emit,deadline)
                     else:
                         raw=json.loads(response.read(3_000_000).decode())

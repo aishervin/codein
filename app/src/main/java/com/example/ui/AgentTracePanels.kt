@@ -22,7 +22,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,10 +39,38 @@ import com.example.ui.theme.AccentRed
 import com.example.ui.theme.NeonOrange
 import com.example.ui.theme.NeonOrangeSoft
 import com.example.ui.theme.TextMuted
+import android.os.SystemClock
+import kotlinx.coroutines.delay
+
+internal data class AgentTraceEvent(val phase: String, val label: String)
 
 @Composable
-internal fun AgentLivePanel(events: List<String>, onStop: (() -> Unit)? = null) {
+internal fun AgentLivePanel(
+    events: List<AgentTraceEvent>,
+    isStreaming: Boolean,
+    startedAtElapsed: Long,
+    onStop: (() -> Unit)? = null
+) {
     var expanded by remember { mutableStateOf(false) }
+    var elapsedSeconds by remember { mutableIntStateOf(0) }
+    LaunchedEffect(isStreaming, startedAtElapsed) {
+        if (isStreaming) {
+            while (true) {
+                elapsedSeconds = ((SystemClock.elapsedRealtime() - startedAtElapsed) / 1000).toInt().coerceAtLeast(0)
+                delay(1000)
+            }
+        }
+    }
+    val current = events.lastOrNull()
+    val currentColor = when (current?.phase) {
+        "waiting" -> NeonOrangeSoft
+        "receiving" -> MaterialTheme.colorScheme.primary
+        "tool" -> NeonOrange
+        "done" -> AccentGreen
+        "approval" -> NeonOrangeSoft
+        "error", "cancelled" -> AccentRed
+        else -> TextMuted
+    }
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .72f),
         shape = RoundedCornerShape(12.dp),
@@ -57,11 +87,37 @@ internal fun AgentLivePanel(events: List<String>, onStop: (() -> Unit)? = null) 
                 }
                 Text(if (expanded) "−" else "+", color = TextMuted, fontSize = 14.sp)
             }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("●", color = currentColor, fontSize = 12.sp)
+                Text(
+                    current?.label ?: "در حال آماده‌سازی درخواست…",
+                    color = currentColor,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isStreaming) {
+                    Text("%02d:%02d".format(elapsedSeconds / 60, elapsedSeconds % 60), color = TextMuted, fontSize = 10.sp)
+                }
+            }
             if (expanded) {
                 Spacer(Modifier.height(7.dp))
                 Column(Modifier.height(150.dp).verticalScroll(rememberScrollState())) {
-                    events.takeLast(40).forEach { line ->
-                        Text(line, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 16.sp)
+                    events.takeLast(40).forEach { event ->
+                        val color = when (event.phase) {
+                            "waiting" -> NeonOrangeSoft
+                            "receiving" -> MaterialTheme.colorScheme.primary
+                            "tool" -> NeonOrange
+                            "done" -> AccentGreen
+                            "approval" -> NeonOrangeSoft
+                            "error", "cancelled" -> AccentRed
+                            else -> TextMuted
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("●", color = color, fontSize = 9.sp, lineHeight = 16.sp)
+                            Text(event.label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 16.sp)
+                        }
                     }
                 }
             }
