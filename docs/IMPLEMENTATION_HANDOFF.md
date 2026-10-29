@@ -13,13 +13,13 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Termux bridge lifecycle is explicit (`start|stop|restart|status|logs`); bootstrap no longer installs an endless auto-restart loop.
 - [x] OpenCode controls delegate to the Termux-compatible manager and stop only its managed `opencode serve` process. App controls use the authenticated MCP tool directly, not shell command text; the provider agent cannot autonomously manage OpenCode. OpenCode remains optional and does not silently replace the selected Codein chat provider.
 - [ ] Re-run the updated Termux bootstrap on-device, then verify Gemini/Composio requests, Stop during a pending response, and bridge stop/start.
-- [x] Android client parses SSE frames, streams tokens to active chat, shows collapsible Agent trace, falls back for old server/unsupported providers, and cancels on stop/clear/history switch.
+- [x] Android client parses provider stream events and shows a collapsible Agent trace. Termux-provider chat now uses MCP Streamable HTTP; the built-in ZERO/HERO route remains unchanged.
 - [x] Cancellation disconnects the app socket and sends the request ID to the server; the server closes the provider response and unwinds the tool loop.
 - [x] SSE framing/auth, provider parsing, cancellation, Gemini schema and transient 503 tests added; all sixteen Termux tests pass; Python syntax check passes.
 - [x] Live panel now shows colored waiting/receiving/tool/approval/completed stages and elapsed time; list auto-scroll includes the stage panel.
 - [x] When provider output is pending, the live stage remains on “waiting for model” while a timer advances; stage changes reflect actual server response and tool events.
 - [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
-- [x] SSE Kotlin client/UI has old-server streaming fallback; signed Android release build compiled successfully in GitHub Actions.
+- [x] Earlier Android streaming UI was built in GitHub Actions; current MCP cutover build is pending CI verification.
 - [x] Gemini `streamGenerateContent` and Anthropic Messages SSE are parsed natively, including tool calls and the existing command approval gate.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
@@ -44,8 +44,8 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `app/src/main/java/com/example/ui/AgentTracePanels.kt`: colored processing stage/timer panel; `app/src/main/java/com/example/ui/MainScreen.kt` maps SSE stages and keeps the panel in view.
 - `app/src/main/java/com/example/ui/components/CodeinSheets.kt`, `termux/composio_connect.py`, `.github/workflows/*.yml`, `docs/`.
 - Connection check is MCP `ping` every 12 seconds, not `initialize` + `tools/list`. Heartbeat change uses a 2-second timeout and suppresses two failures only after the first successful ping.
-- Push to `main` starts `android-ci.yml`; changes under `app/**` or workflow paths also match `android-main-build.yml`. `[skip ci]` is required to honor no-build instruction.
-- GitHub `main` is ahead of this workspace Git metadata: commits were created through the connected GitHub integration because local HTTPS push had no credentials. Local source files match the pushed code, but `git status` may show them as uncommitted relative to local `HEAD`; do not blindly push or reset. Compare with GitHub `main` before further Git operations.
+- Push to `main` starts `android-ci.yml`; changes under `app/**` also start `android-main-build.yml`. Keep the current MCP fix eligible for both checks; do not create a release tag unless asked.
+- This workspace has no local Git metadata. Use the connected GitHub integration to commit; never reset or overwrite unrelated workspace files.
 
 ## Checklist
 
@@ -69,7 +69,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Add collapsed live trace panel and stop control; existing permission panel handles approve/reject.
 - [x] Color event stages, show elapsed processing time, retain final/error/cancelled states, and auto-scroll the current stage into view.
 - [x] Add failure hysteresis and short ping; ping is already lightweight, so do not add tools/list polling.
-- [x] Handle 401, missing provider key, timeout and old Termux server; old server falls back to MCP chat.
+- [x] Handle 401, missing provider key, timeout and old Termux server; outdated bridges prompt for the updater rather than silently using a legacy chat route.
 - [x] OpenCode service controls use a managed PID file and do not use broad `pkill`; there is not yet automatic chat-provider fallback to OpenCode.
 
 ### 4. Agent Room UI / integration
@@ -81,7 +81,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 
 ### 5. Docs, verification, commits
 - [x] Update bootstrap to install the bridge lifecycle manager and start it without an endless supervisor loop.
-- [x] Run the updated Termux suite (16 tests), Python syntax checks, all three Termux shell syntax checks and `git diff --check`; local Kotlin compilation is unavailable because Java/Gradle are absent.
+- [x] Run the updated Termux suite (20 tests), Python syntax checks, all three Termux shell syntax checks; local Kotlin compilation is unavailable because Java is absent.
 - [x] Review diff for approval bypass, unintended Hero/Zero/Dolphin changes, identifier/signing changes and secrets.
 - [x] Update this checklist and `outputs/codein-handoff.md` with facts, tests and commit hashes.
 - [x] Commit each coherent chunk on `main`, English scoped message plus `[skip ci]`; verify pushes do not start Actions.
@@ -128,3 +128,12 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - A Cloudflare build log ran `npx wrangler deploy` from the repository root and failed to find static files because no root Wrangler config was present. The config now lives at the repository root and points to `worker/src/index.mjs`, matching Cloudflare's existing deploy command. If the project is configured as a static Pages site, use a Workers project instead.
 - Cloudflare's Git build can only deploy Worker files present in its connected remote branch; push the Worker source/config before retrying that build.
 - Next: user completes Cloudflare sign-in in the live browser; configure a scoped Composio Platform project key and generated identity-signing secret through Wrangler secure prompts; deploy `worker/`; set GitHub Actions variable `COMPOSIO_WORKER_URL`; then run a public-path integration check and build the APK.
+
+## MCP Provider Chat Cutover (2026-10-30)
+- Latest screenshots show the active model is built-in ZERO while the Termux MCP bridge is disconnected. ZERO/HERO and Dolphin remain unchanged; select a Termux provider model to use the MCP route.
+- Android Termux-provider chat now calls MCP `tools/call` for `provider_chat`, consumes `notifications/message` stream events, and sends `notifications/cancelled` when stopped. Legacy REST/SSE routes remain for other local clients but Android provider chat no longer uses them.
+- Termux server version is 1.2.0 and advertises logging capability for MCP stream events. Tests cover progress, final responses and cancellation.
+- The Termux installer stages and validates the complete update before replacing files, restarts the bridge, and verifies MCP version 1.2.0. Existing `config.json` token, API-key files, `ROOM.md`, `state.json`, and `.gitignore` are preserved.
+- Android app version is 1.2.0 / versionCode 21. Main-build workflow artifact is named `Codein-1.2.0-Universal.apk`; no public release/tag is created by this change.
+- Local verification: 20 Termux tests passed, 5 Worker tests passed, Python and shell syntax checks passed. Kotlin/Gradle build could not run because Java is unavailable; GitHub Actions must verify it.
+- Required device check after delivery: run the installer in Termux, re-enter the existing bridge token if needed, select the Termux provider model, verify Gemini/Composio and Stop; do not run a second service or manually execute `server.py`.

@@ -62,16 +62,16 @@ jobs:
           STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: bash ./gradlew assembleRelease --no-daemon --stacktrace --console=plain -PversionName=1.1.0 -PversionCode=20 -PCOMPOSIO_WORKER_URL="$COMPOSIO_WORKER_URL"
+        run: bash ./gradlew assembleRelease --no-daemon --stacktrace --console=plain -PversionName=1.2.0 -PversionCode=21 -PCOMPOSIO_WORKER_URL="$COMPOSIO_WORKER_URL"
 
       - name: Rename APK
-        run: mv app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/Codein-1.1.0-Universal.apk
+        run: mv app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/Codein-1.2.0-Universal.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Codein-1.1.0-Universal
-          path: app/build/outputs/apk/release/Codein-1.1.0-Universal.apk
+          name: Codein-1.2.0-Universal
+          path: app/build/outputs/apk/release/Codein-1.2.0-Universal.apk
           if-no-files-found: error
           retention-days: 14
 

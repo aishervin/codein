@@ -39,22 +39,39 @@ class TermuxBridgeClient(context: Context) {
     suspend fun health(): JSONObject {
         val init = mcpRequest("initialize", JSONObject()
             .put("protocolVersion", "2025-03-26")
-            .put("capabilities", JSONObject())
+            .put("capabilities", JSONObject().put("logging", JSONObject()))
             .put("clientInfo", JSONObject().put("name", "Codein Android").put("version", "1.0.5")))
         mcpNotification("notifications/initialized")
         val tools = mcpRequest("tools/list", JSONObject())
         val toolArray = tools.optJSONArray("tools") ?: JSONArray()
         val toolNames = (0 until toolArray.length()).mapNotNull { toolArray.optJSONObject(it)?.optString("name") }.toSet()
-        val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_chat")
+        val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_chat", "composio_platform_configure", "composio_tools_refresh")
         val missing = requiredTools - toolNames
         check(missing.isEmpty()) {
-            "The Termux MCP server is outdated (missing " + missing.joinToString() + "). Re-run the Codein Termux installer."
+            "پل MCP ترموکس قدیمی است (ابزارهای لازم را ندارد). از تب سرویس‌ها دستور به‌روزرسانی را کپی و در Termux اجرا کن."
+        }
+        val serverVersion = init.optJSONObject("serverInfo")?.optString("version").orEmpty()
+        check(versionAtLeast(serverVersion, "1.2.0")) {
+            "نسخهٔ پل MCP ترموکس قدیمی است ($serverVersion). در تب سرویس‌ها دستور به‌روزرسانی را کپی و در Termux اجرا کن؛ کلیدها و توکن قبلی حفظ می‌شوند."
         }
         return JSONObject()
             .put("ok", true)
             .put("service", init.optJSONObject("serverInfo")?.optString("name", "MCP Termux") ?: "MCP Termux")
+            .put("version", serverVersion)
             .put("protocolVersion", init.optString("protocolVersion"))
             .put("tools", toolArray)
+    }
+
+    private fun versionAtLeast(actual: String, minimum: String): Boolean {
+        fun parts(value: String) = value.split('.').map { it.toIntOrNull() ?: 0 }
+        val left = parts(actual)
+        val right = parts(minimum)
+        for (index in 0 until maxOf(left.size, right.size)) {
+            val a = left.getOrElse(index) { 0 }
+            val b = right.getOrElse(index) { 0 }
+            if (a != b) return a > b
+        }
+        return actual.isNotBlank()
     }
 
     /** Lightweight MCP liveness probe for the periodic connection indicator. */
@@ -135,7 +152,7 @@ class TermuxBridgeClient(context: Context) {
         return result
     }
 
-    /** Stream provider events; providers without native SSE support fall back to the legacy route. */
+    /** Stream provider chat and MCP tool progress over the MCP Streamable HTTP transport. */
     @OptIn(InternalCoroutinesApi::class)
     suspend fun chatStream(
         provider: String,
@@ -144,111 +161,130 @@ class TermuxBridgeClient(context: Context) {
         system: String,
         onEvent: suspend (JSONObject) -> Unit
     ): JSONObject {
-        return try {
-            withContext(Dispatchers.IO) {
-                check(bearerToken.isNotBlank()) { "Termux bridge token is missing." }
-                val connection = (URL(baseUrl + "/api/chat/stream").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    connectTimeout = 8_000
-                    readTimeout = 190_000
-                    setRequestProperty("Authorization", "Bearer " + bearerToken)
-                    setRequestProperty("Accept", "text/event-stream")
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    doOutput = true
-                }
-                val requestId = UUID.randomUUID().toString()
-                val requestJob = currentCoroutineContext()[Job]
-                val cancellation = requestJob?.invokeOnCompletion(onCancelling = true) { cause ->
-                    connection.disconnect()
-                    if (cause is CancellationException) {
-                        Thread {
-                            val cancelConnection = runCatching {
-                                (URL(baseUrl + "/api/chat/cancel").openConnection() as HttpURLConnection).apply {
-                                    requestMethod = "POST"
-                                    connectTimeout = 2_000
-                                    readTimeout = 2_000
-                                    setRequestProperty("Authorization", "Bearer " + bearerToken)
-                                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                                    doOutput = true
-                                }
-                            }.getOrNull()
-                            try {
-                                cancelConnection?.outputStream?.use {
-                                    it.write(JSONObject().put("request_id", requestId).toString().toByteArray(Charsets.UTF_8))
-                                }
-                                cancelConnection?.responseCode
-                            } catch (_: Exception) {
-                            } finally {
-                                cancelConnection?.disconnect()
+        return withContext(Dispatchers.IO) {
+            check(bearerToken.isNotBlank()) { "توکن پل MCP ترموکس وارد نشده است." }
+            val requestId = UUID.randomUUID().toString()
+            val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8_000
+                readTimeout = 190_000
+                setRequestProperty("Authorization", "Bearer " + bearerToken)
+                setRequestProperty("MCP-Protocol-Version", "2025-03-26")
+                setRequestProperty("Accept", "application/json, text/event-stream")
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                doOutput = true
+            }
+            val requestJob = currentCoroutineContext()[Job]
+            val cancellation = requestJob?.invokeOnCompletion(onCancelling = true) { cause ->
+                connection.disconnect()
+                if (cause is CancellationException) {
+                    Thread {
+                        val cancelConnection = runCatching {
+                            (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
+                                requestMethod = "POST"
+                                connectTimeout = 2_000
+                                readTimeout = 2_000
+                                setRequestProperty("Authorization", "Bearer " + bearerToken)
+                                setRequestProperty("MCP-Protocol-Version", "2025-03-26")
+                                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                                doOutput = true
                             }
-                        }.apply { isDaemon = true; start() }
-                    }
-                }
-                try {
-                    val payload = JSONObject()
-                        .put("request_id", requestId)
-                        .put("provider", provider)
-                        .put("model", model)
-                        .put("messages", messages)
-                        .put("system", system)
-                        .put("timeout", 120)
-                    connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-                    val status = connection.responseCode
-                    if (status !in 200..299) {
-                        if (status == 404) throw StreamingNotSupported()
-                        val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                        throw IllegalStateException("Termux stream HTTP $status: " + detail.take(700))
-                    }
-                    val answer = StringBuilder()
-                    var completed = false
-                    var permissionCommand: String? = null
-                    connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                        val dataLines = mutableListOf<String>()
-                        suspend fun dispatchFrame() {
-                            if (dataLines.isEmpty()) return
-                            val event = runCatching { JSONObject(dataLines.joinToString("\n")) }.getOrNull()
-                            dataLines.clear()
-                            if (event == null) return
-                            when (event.optString("type")) {
-                                "token" -> answer.append(event.optString("text"))
-                                "done" -> completed = true
-                                "approval_required" -> permissionCommand = event.optString("command")
-                                "error" -> {
-                                    val message = event.optString("error", "Provider streaming failed")
-                                    if (message.contains("not yet supported for this provider")) throw StreamingNotSupported()
-                                    if (message == "missing_api_key") {
-                                        throw MissingProviderCredential(event.optString("credential_name"), event.optString("provider_name"))
-                                    }
-                                    throw IllegalStateException(message + event.optString("detail").takeIf(String::isNotBlank)?.let { ": " + it.take(500) }.orEmpty())
-                                }
+                        }.getOrNull()
+                        try {
+                            cancelConnection?.outputStream?.use {
+                                val notice = JSONObject()
+                                    .put("jsonrpc", "2.0")
+                                    .put("method", "notifications/cancelled")
+                                    .put("params", JSONObject().put("requestId", requestId).put("reason", "User stopped response"))
+                                it.write(notice.toString().toByteArray(Charsets.UTF_8))
                             }
-                            withContext(Dispatchers.Main) { onEvent(event) }
+                            cancelConnection?.responseCode
+                        } catch (_: Exception) {
+                        } finally {
+                            cancelConnection?.disconnect()
                         }
-                        while (!completed && permissionCommand == null) {
-                            val line = reader.readLine() ?: break
-                            when {
-                                line.isEmpty() -> dispatchFrame()
-                                line.startsWith("data:") -> dataLines += line.removePrefix("data:").trimStart()
-                            }
-                        }
-                        if (dataLines.isNotEmpty()) dispatchFrame()
-                    }
-                    permissionCommand?.let {
-                        return@withContext JSONObject().put("ok", true).put("permission_required", true).put("command", it)
-                    }
-                    check(completed) { "Termux stream ended before completion." }
-                    JSONObject().put("ok", true).put("provider", provider).put("model", model).put("content", answer.toString())
-                } finally {
-                    cancellation?.dispose()
-                    connection.disconnect()
+                    }.apply { isDaemon = true; start() }
                 }
             }
-        } catch (_: StreamingNotSupported) {
-            chat(provider, model, messages, system)
+            try {
+                val arguments = JSONObject()
+                    .put("provider", provider)
+                    .put("model", model)
+                    .put("messages", messages)
+                    .put("system", system)
+                    .put("timeout", 120)
+                val payload = JSONObject()
+                    .put("jsonrpc", "2.0")
+                    .put("id", requestId)
+                    .put("method", "tools/call")
+                    .put("params", JSONObject()
+                        .put("name", "provider_chat")
+                        .put("arguments", arguments)
+                        .put("_meta", JSONObject().put("progressToken", requestId)))
+                connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                val status = connection.responseCode
+                if (status !in 200..299) {
+                    val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                    throw IllegalStateException("MCP HTTP $status: " + detail.take(700))
+                }
+                check(connection.contentType?.contains("text/event-stream", ignoreCase = true) == true) {
+                    "پل MCP ترموکس از استریم استاندارد پشتیبانی نمی‌کند؛ آن را با دستور تب سرویس‌ها به‌روزرسانی کن."
+                }
+                val answer = StringBuilder()
+                var finalResult: JSONObject? = null
+                connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                    val dataLines = mutableListOf<String>()
+                    suspend fun dispatchFrame() {
+                        if (dataLines.isEmpty()) return
+                        val frame = runCatching { JSONObject(dataLines.joinToString("\n")) }.getOrNull()
+                        dataLines.clear()
+                        if (frame == null) return
+                        if (frame.optString("method") == "notifications/message") {
+                            val event = frame.optJSONObject("params")?.optJSONObject("data") ?: return
+                            when (event.optString("type")) {
+                                "token" -> answer.append(event.optString("text"))
+                                "error" -> throw IllegalStateException(
+                                    listOf(event.optString("error"), event.optString("detail"))
+                                        .filter(String::isNotBlank)
+                                        .joinToString(": ")
+                                        .ifBlank { "پاسخ مدل ناموفق بود." }
+                                        .take(700)
+                                )
+                            }
+                            withContext(Dispatchers.Main) { onEvent(event) }
+                        } else if (frame.optString("id") == requestId) {
+                            frame.optJSONObject("error")?.let { throw IllegalStateException(it.optString("message").ifBlank { "درخواست MCP ناموفق بود." }) }
+                            val result = frame.optJSONObject("result") ?: JSONObject()
+                            val content = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty()
+                            if (result.optBoolean("isError")) {
+                                val detail = runCatching { JSONObject(content) }.getOrNull()
+                                if (detail?.optString("error") == "missing_api_key") {
+                                    throw MissingProviderCredential(detail.optString("credential_name"), detail.optString("provider_name"))
+                                }
+                                val message = detail?.optString("error").orEmpty().ifBlank { content.take(500) }
+                                throw IllegalStateException(message)
+                            }
+                            finalResult = runCatching { JSONObject(content) }.getOrElse {
+                                JSONObject().put("ok", true).put("provider", provider).put("model", model).put("content", content)
+                            }
+                        }
+                    }
+                    while (finalResult == null) {
+                        val line = reader.readLine() ?: break
+                        when {
+                            line.isEmpty() -> dispatchFrame()
+                            line.startsWith("data:") -> dataLines += line.removePrefix("data:").trimStart()
+                        }
+                    }
+                    if (dataLines.isNotEmpty()) dispatchFrame()
+                }
+                finalResult ?: error("استریم MCP پیش از پایان پاسخ قطع شد.")
+            } finally {
+                cancellation?.dispose()
+                connection.disconnect()
+            }
         }
     }
-
-    private class StreamingNotSupported : IllegalStateException()
 
     suspend fun credentialNames(): List<String> {
         val result = mcpTool("credentials_list", JSONObject())

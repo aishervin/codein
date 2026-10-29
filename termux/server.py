@@ -12,6 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
+SERVER_VERSION="1.2.0"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -764,6 +765,53 @@ class Handler(BaseHTTPRequestHandler):
         if data is not None: error["data"]=data
         self.sendj(status,{"jsonrpc":"2.0","id":request_id,"error":error})
 
+    def send_mcp_sse(self, payload):
+        frame=("event: message\ndata: "+json.dumps(payload,ensure_ascii=False,separators=(",",":"))+"\n\n").encode("utf-8")
+        self.wfile.write(frame)
+        self.wfile.flush()
+
+    def handle_mcp_provider_chat(self, request_id, params):
+        request_key=str(request_id)
+        control=register_stream(request_key)
+        self.send_response(200)
+        self.send_header("Content-Type","text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control","no-cache, no-transform")
+        self.send_header("X-Accel-Buffering","no")
+        self.end_headers()
+
+        def emit(payload):
+            control.check()
+            self.send_mcp_sse({
+                "jsonrpc":"2.0",
+                "method":"notifications/message",
+                "params":{"level":"info","logger":"codein.provider_chat","data":payload}
+            })
+
+        try:
+            arguments=params.get("arguments") or {}
+            status,result=provider_chat(arguments,emit,control)
+            if status==499:
+                raise RequestCancelled()
+            self.send_mcp_sse({
+                "jsonrpc":"2.0",
+                "id":request_id,
+                "result":{"content":[{"type":"text","text":json.dumps(result,ensure_ascii=False)}],"isError":status!=200}
+            })
+        except RequestCancelled:
+            try:
+                self.send_mcp_sse({"jsonrpc":"2.0","id":request_id,"error":{"code":-32800,"message":"Request cancelled"}})
+            except (BrokenPipeError,ConnectionResetError):
+                pass
+        except (BrokenPipeError,ConnectionResetError):
+            pass
+        except Exception as exc:
+            try:
+                self.send_mcp_sse({"jsonrpc":"2.0","id":request_id,"result":{"content":[{"type":"text","text":str(exc)[:1500]}],"isError":True}})
+            except (BrokenPipeError,ConnectionResetError):
+                pass
+        finally:
+            unregister_stream(request_key,control)
+
     def handle_mcp(self):
         if not self.auth(): return self.mcp_error(None,-32001,"Authorization required",status=401)
         origin=self.headers.get("Origin")
@@ -778,13 +826,16 @@ class Handler(BaseHTTPRequestHandler):
         params=message.get("params") or {}
         # MCP notifications have no request ID and must not receive a JSON-RPC response.
         if request_id is None:
+            if method=="notifications/cancelled":
+                cancelled_id=params.get("requestId")
+                if cancelled_id is not None: cancel_stream(str(cancelled_id))
             self.send_response(202); self.send_header("Content-Length","0"); self.end_headers()
             return
         if method=="initialize":
             return self.mcp_result(request_id,{
                 "protocolVersion":"2025-03-26",
-                "capabilities":{"tools":{"listChanged":False}},
-                "serverInfo":{"name":"codein-termux","version":"1.1.0"},
+                "capabilities":{"logging":{},"tools":{"listChanged":False}},
+                "serverInfo":{"name":"codein-termux","version":SERVER_VERSION},
                 "instructions":"Local Codein Termux tools. Execute only user-authorized actions. Never expose local credential values."
             })
         if method=="ping": return self.mcp_result(request_id,{})
@@ -792,6 +843,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.mcp_result(request_id,{"tools":mcp_tools_catalog()})
         if method=="tools/call":
             name=str(params.get("name","")); args=params.get("arguments") or {}
+            if name=="provider_chat" and "text/event-stream" in self.headers.get("Accept",""):
+                return self.handle_mcp_provider_chat(request_id,params)
             try:
                 result=dispatch_mcp_tool(name,args)
                 return self.mcp_result(request_id,{"content":[{"type":"text","text":json.dumps(result,ensure_ascii=False)}],"isError":False})
@@ -820,7 +873,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type","text/event-stream; charset=utf-8")
             self.send_header("Cache-Control","no-cache, no-transform")
             self.send_header("X-Accel-Buffering","no")
-            self.send_header("Connection","keep-alive")
             self.send_header("Access-Control-Allow-Origin","*")
             self.end_headers()
             def emit_sse(payload):

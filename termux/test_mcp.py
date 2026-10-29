@@ -92,6 +92,69 @@ class McpTransportTests(unittest.TestCase):
         self.assertIn('data: {"type":"token","text":"hello"}\n\n',body)
         self.assertIn('data: {"type":"done"}\n\n',body)
 
+    def test_mcp_provider_chat_stream_sends_progress_and_final_result(self):
+        def fake_chat(_data, emit, _cancel=None):
+            emit({"type":"status","stage":"waiting_provider"})
+            emit({"type":"token","text":"hello"})
+            return 200,{"ok":True,"content":"hello"}
+
+        payload={"jsonrpc":"2.0","id":"mcp-chat-stream","method":"tools/call","params":{
+            "name":"provider_chat","arguments":{"provider":"gemini","model":"test","messages":[]}
+        }}
+        request=Request(self.url,data=json.dumps(payload).encode(),headers={
+            "Authorization":"Bearer mcp-test-token",
+            "Accept":"application/json, text/event-stream",
+            "Content-Type":"application/json"
+        },method="POST")
+        with patch.object(mcp_server,"provider_chat",side_effect=fake_chat):
+            with urlopen(request,timeout=3) as response:
+                body=response.read().decode()
+                self.assertEqual(response.headers.get_content_type(),"text/event-stream")
+
+        frames=[json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+        progress=[frame for frame in frames if frame.get("method")=="notifications/message"]
+        final=next(frame for frame in frames if frame.get("id")=="mcp-chat-stream")
+        self.assertEqual([item["params"]["data"]["type"] for item in progress],["status","token"])
+        self.assertEqual(json.loads(final["result"]["content"][0]["text"])["content"],"hello")
+
+    def test_mcp_cancelled_notification_cancels_provider_chat(self):
+        request_id="mcp-cancel-stream"
+        started=threading.Event()
+        finished=threading.Event()
+
+        def fake_chat(_data,emit,cancel):
+            emit({"type":"status","stage":"waiting_provider"})
+            started.set()
+            cancel.cancelled.wait(3)
+            finished.set()
+            return 499,{"ok":False,"error":"Request cancelled"}
+
+        payload={"jsonrpc":"2.0","id":request_id,"method":"tools/call","params":{
+            "name":"provider_chat","arguments":{"provider":"gemini","model":"test","messages":[]}
+        }}
+        request=Request(self.url,data=json.dumps(payload).encode(),headers={
+            "Authorization":"Bearer mcp-test-token",
+            "Accept":"application/json, text/event-stream",
+            "Content-Type":"application/json"
+        },method="POST")
+        with patch.object(mcp_server,"provider_chat",side_effect=fake_chat):
+            response=urlopen(request,timeout=3)
+            self.assertTrue(started.wait(2))
+            notice={"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":request_id,"reason":"user stop"}}
+            cancel_request=Request(self.url,data=json.dumps(notice).encode(),headers={
+                "Authorization":"Bearer mcp-test-token",
+                "Accept":"application/json",
+                "Content-Type":"application/json"
+            },method="POST")
+            with urlopen(cancel_request,timeout=3) as cancel_response:
+                self.assertEqual(cancel_response.status,202)
+            body=response.read().decode()
+            response.close()
+        self.assertTrue(finished.wait(2))
+        frames=[json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+        final=next(frame for frame in frames if frame.get("id")==request_id)
+        self.assertEqual(final["error"]["code"],-32800)
+
     def test_chat_stream_rejects_missing_token(self):
         request=Request(self.url.replace("/mcp","/api/chat/stream"),data=b"{}",headers={
             "Content-Type":"application/json"
@@ -345,6 +408,8 @@ class McpTransportTests(unittest.TestCase):
         })
         self.assertEqual(status, 200)
         self.assertEqual(response["result"]["protocolVersion"], "2025-03-26")
+        self.assertEqual(response["result"]["serverInfo"]["version"], "1.2.0")
+        self.assertIn("logging", response["result"]["capabilities"])
         status, _ = self.rpc("notifications/initialized", request_id=None)
         self.assertEqual(status, 202)
         _, response = self.rpc("tools/list")
