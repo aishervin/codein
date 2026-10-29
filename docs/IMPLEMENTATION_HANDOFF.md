@@ -14,7 +14,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Live panel now shows colored waiting/receiving/tool/approval/completed stages and elapsed time; list auto-scroll includes the stage panel.
 - [x] When provider output is pending, the live stage remains on “waiting for model” while a timer advances; stage changes reflect actual server response and tool events.
 - [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
-- [x] SSE Kotlin client/UI has old-server streaming fallback; compile verification is pending.
+- [x] SSE Kotlin client/UI has old-server streaming fallback; signed Android release build compiled successfully in GitHub Actions.
 - [x] Gemini `streamGenerateContent` and Anthropic Messages SSE are parsed natively, including tool calls and the existing command approval gate.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
@@ -78,9 +78,8 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 
 ## Recommended order
 1. Consider real provider network/timeout/disconnect tests if credentials and external calls are explicitly in scope.
-2. Review Kotlin changes again if they are modified; compile only if the user later permits it.
-3. Finish Composio review only if its OAuth flow is part of the next requested scope.
-4. Finish WebView Termux structured-tool integration and release workflow hardening; commit to `main`, then run the authorized signed v1.1.0 release workflow and verify its APK.
+2. Verify the v1.1.0 APK on a device and smoke-test the WebView Termux approval/result loop.
+3. Finish Composio review only if its OAuth flow is part of a later requested scope.
 
 ## Acceptance criteria
 - Provider tokens appear incrementally; old endpoints still work.
@@ -101,5 +100,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `0541e8a809997c8b4781a5feed8c8a1b43d90c6f` — finalized Agent Room handoff status; exact SHA has 0 workflow runs.
 - `de130efc3f228ed3afdb3cac50362cc15db47af3` — native Gemini/Anthropic SSE plus parser, request and approval-gate tests; exact SHA has 0 workflow runs.
 - `8159b3ead9393899330d890c390dccd0658ae2ae` — colored live processing stages, elapsed timer, auto-scroll and server provider-stage events; exact SHA has 0 workflow runs. Kotlin remains uncompiled by request.
+- `bd5a87f57d870e6c9833590bb01144e5d228ed10` — structured WebView Termux handoff, v1.1.0 release settings and workflow hardening; `[skip ci]`.
 - `python3 -B -m unittest termux/test_mcp.py` — 11 tests passed, including provider stage events; `python3 -B -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
-- `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.
+- `bash -n termux/codein-bootstrap.sh` — passed. Local `:app:compileDebugKotlin` could not start because Java is unavailable in this workspace. The authorized GitHub Android Release workflow compiled and built the signed APK, restored the configured signing key, uploaded the artifact, and published v1.1.0.
+- Android Release run `40909550882` — success on `bd5a87f57d870e6c9833590bb01144e5d228ed10`. Published `Codein-1.1.0-Universal.apk` (10,946,816 bytes); release: https://github.com/aishervin/codein/releases/tag/v1.1.0 . `COMPOSIO_API_KEY` remains passed into the build; secret values were not accessed.
