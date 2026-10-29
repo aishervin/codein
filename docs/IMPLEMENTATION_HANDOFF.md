@@ -7,12 +7,13 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Review report created: `outputs/codein-review.html` (workspace deliverable).
 - [x] Baseline was clean `main`, HEAD `0bc77f2` (`Build main artifacts as Codein 1.0.9`).
 - [x] Heartbeat now uses a 2-second MCP ping and suppresses two transient errors after first successful ping.
-- [x] Authenticated SSE endpoint streams OpenAI-compatible providers; old `/api/chat` and MCP route remain.
+- [x] Authenticated SSE endpoint streams OpenAI-compatible, Gemini, and Anthropic providers; old `/api/chat` and MCP route remain.
 - [x] Android client parses SSE frames, streams tokens to active chat, shows collapsible Agent trace, falls back for old server/unsupported providers, and cancels on stop/clear/history switch.
 - [x] Cancellation disconnects the HTTP socket immediately so the server can stop upstream streaming.
 - [x] SSE framing/auth and OpenAI tool-delta tests added; all seven Termux tests pass; Python syntax check passes.
 - [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
-- [x] SSE Kotlin client/UI is committed but not compiled (build prohibited); Gemini/Anthropic native streaming remains unimplemented and falls back to legacy chat.
+- [x] SSE Kotlin client/UI is committed but not compiled (build prohibited); old-server streaming fallback remains.
+- [x] Gemini `streamGenerateContent` and Anthropic Messages SSE are parsed natively, including tool calls and the existing command approval gate.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
 ## User requirements
@@ -27,7 +28,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 ## Relevant files and findings
 - `app/src/main/java/com/example/ui/MainScreen.kt`: main chat + `TermuxAgentRoomDialog` (~1881); Termux connection state near lines 362-383.
 - `app/src/main/java/com/example/termux/TermuxBridgeClient.kt`: MCP and REST client; `ping()` already calls lightweight MCP `ping`.
-- `termux/server.py`: providers, legacy non-streaming chat, new SSE route for OpenAI-compatible providers, command approval/execute, MCP and REST handlers.
+- `termux/server.py`: providers, legacy non-streaming chat, provider-native SSE readers, command approval/execute, MCP and REST handlers.
 - `termux/codein-bootstrap.sh`: downloads server from `main` and restarts it.
 - `app/src/main/java/com/example/ui/AgentTracePanels.kt`, `app/src/main/java/com/example/ui/components/CodeinSheets.kt`, `termux/composio_connect.py`, `.github/workflows/*.yml`, `docs/`.
 - Connection check is MCP `ping` every 12 seconds, not `initialize` + `tools/list`. Heartbeat change uses a 2-second timeout and suppresses two failures only after the first successful ping.
@@ -44,10 +45,10 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 ### 2. Termux server streaming
 - [x] Add authenticated `POST /api/chat/stream` with flushed SSE JSON frames (`status`, `token`, `tool_call`, `tool_result`, `approval_required`, `error`, `done`).
 - [x] Stream OpenAI-compatible providers; preserve existing `/api/chat` and MCP `provider_chat` behavior.
-- [ ] Add native streaming for Gemini and Anthropic (currently the client falls back to the legacy non-streaming route).
+- [x] Add native streaming for Gemini and Anthropic; preserve text and provider tool-call structures across stream chunks.
 - [x] Retain provider tool loop and exact-command approval gate; proposed commands still stop at `approval_required`.
 - [x] Tool loop is capped at 9 iterations; streaming total time is capped at 300 seconds; broken client writes unwind and close the upstream response.
-- [x] Add stdlib tests for SSE framing/auth and streamed tool deltas; existing tests cover exact-command approval. Re-run after future server edits.
+- [x] Add stdlib tests for SSE framing/auth, OpenAI/Gemini/Anthropic text and tool streams, native provider request shape and the command approval gate. Re-run after future server edits.
 
 ### 3. Android streaming and connection stability
 - [x] Implement SSE line/event parsing (partial network chunks, UTF-8, multiple data lines) and cancelable HTTP request in `TermuxBridgeClient`.
@@ -92,5 +93,6 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `0236614d6504d9a6bfcdec327b61ce06e31f161e` — immediate SSE cancellation added; its exact SHA has 0 workflow runs. Kotlin remains uncompiled.
 - `3cd42a056afc8310c5cab70d4b1b5c409149ed63` — Agent Room tabs, masked credentials, report view, and design doc; exact SHA has 0 workflow runs.
 - `72101067515e7afe3e1a5ee4656ff49aa4b3e42a` — updated project checklist after tab cleanup; exact SHA has 0 workflow runs.
-- `python3 -m unittest termux/test_mcp.py` — 7 tests passed; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
+- `0541e8a809997c8b4781a5feed8c8a1b43d90c6f` — finalized Agent Room handoff status; exact SHA has 0 workflow runs.
+- `python3 -m unittest termux/test_mcp.py` — 11 tests passed, including Gemini/Anthropic streaming and approval gate; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
 - `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.

@@ -285,6 +285,110 @@ def read_openai_stream(response, emit, deadline):
         message["tool_calls"]=[calls[key] for key in sorted(calls)]
     return message
 
+def iter_sse_events(response, deadline):
+    data=[]
+    event_name=""
+    for raw_line in response:
+        if time.monotonic()>deadline:
+            raise TimeoutError("Provider chat exceeded its total time limit")
+        line=raw_line.decode("utf-8",errors="replace").rstrip("\r\n")
+        if not line:
+            if data:
+                try: payload=json.loads("\n".join(data))
+                except ValueError: payload=None
+                if payload is not None: yield event_name,payload
+            data=[]; event_name=""
+        elif line.startswith(":"):
+            continue
+        elif line.startswith("event:"):
+            event_name=line[6:].strip()
+        elif line.startswith("data:"):
+            data.append(line[5:].lstrip())
+    if data:
+        try: payload=json.loads("\n".join(data))
+        except ValueError: payload=None
+        if payload is not None: yield event_name,payload
+
+def read_gemini_stream(response, emit, deadline):
+    text=[]
+    calls=[]
+    call_indexes={}
+    provider_parts=[]
+    for _,chunk in iter_sse_events(response,deadline):
+        if chunk.get("error"):
+            raise RuntimeError("Gemini streaming request failed")
+        candidates=chunk.get("candidates") or []
+        if not candidates: continue
+        content=(candidates[0].get("content") or {})
+        occurrences={}
+        for part in content.get("parts") or []:
+            if not isinstance(part,dict): continue
+            value=part.get("text")
+            if isinstance(value,str) and value:
+                text.append(value)
+                emit({"type":"token","text":value})
+                provider_parts.append(dict(part))
+            call=part.get("functionCall")
+            if not isinstance(call,dict): continue
+            name=str(call.get("name") or "")
+            occurrence=occurrences.get(name,0)
+            occurrences[name]=occurrence+1
+            index=call_indexes.get((name,occurrence))
+            if index is None:
+                index=len(calls)
+                call_indexes[(name,occurrence)]=index
+                stored_part={key:value for key,value in part.items() if key!="functionCall"}
+                stored_call={key:value for key,value in call.items() if key!="args"}
+                stored_call["args"]={}
+                stored_part["functionCall"]=stored_call
+                calls.append({"name":name,"args":{},"part":stored_part})
+            args=call.get("args") or {}
+            calls[index]["part"].update({key:value for key,value in part.items() if key!="functionCall"})
+            calls[index]["part"]["functionCall"].update({key:value for key,value in call.items() if key!="args"})
+            if isinstance(args,dict):
+                calls[index]["args"].update(args)
+                calls[index]["part"]["functionCall"]["args"].update(args)
+    message={"role":"assistant","content":"".join(text)}
+    if calls:
+        message["provider_content"]={"role":"model","parts":provider_parts+[call["part"] for call in calls]}
+        message["tool_calls"]=[{"id":"gemini-"+str(index),"type":"function","function":{"name":call["name"],"arguments":json.dumps(call["args"],ensure_ascii=False)}} for index,call in enumerate(calls)]
+    return message
+
+def read_anthropic_stream(response, emit, deadline):
+    blocks={}
+    for event_name,payload in iter_sse_events(response,deadline):
+        kind=payload.get("type") or event_name
+        if kind=="error":
+            raise RuntimeError("Anthropic streaming request failed")
+        index=payload.get("index")
+        if kind=="content_block_start" and isinstance(index,int):
+            block=payload.get("content_block") or {}
+            blocks[index]=dict(block)
+            if block.get("type")=="tool_use": blocks[index]["input_json"]=""
+        elif kind=="content_block_delta" and isinstance(index,int):
+            block=blocks.setdefault(index,{"type":"text","text":""})
+            delta=payload.get("delta") or {}
+            if delta.get("type")=="text_delta":
+                value=str(delta.get("text") or "")
+                block["text"]=str(block.get("text") or "")+value
+                if value: emit({"type":"token","text":value})
+            elif delta.get("type")=="input_json_delta":
+                block["input_json"]+=str(delta.get("partial_json") or "")
+    content=[]
+    calls=[]
+    for index in sorted(blocks):
+        block=blocks[index]
+        if block.get("type")=="tool_use":
+            raw=block.pop("input_json","")
+            try: block["input"]=json.loads(raw) if raw else block.get("input") or {}
+            except ValueError: block["input"]={}
+            calls.append(block)
+        content.append(block)
+    message={"role":"assistant","content":"".join(str(block.get("text","")) for block in content if block.get("type")=="text"),"provider_content":content}
+    if calls:
+        message["tool_calls"]=[{"id":call.get("id",""),"type":"function","function":{"name":call.get("name",""),"arguments":json.dumps(call.get("input") or {},ensure_ascii=False)}} for call in calls]
+    return message
+
 def provider_chat(data, emit=None):
     pid=str(data.get("provider","")).strip().lower()
     provider=PROVIDERS.get(pid)
@@ -305,8 +409,6 @@ def provider_chat(data, emit=None):
     system=str(data.get("system",""))[:30000]
     timeout=max(10,min(int(data.get("timeout",120)),180))
     deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",300)),300)) if emit else None
-    if emit and provider["kind"]!="openai":
-        return 501,{"ok":False,"error":"Streaming is not yet supported for this provider","provider":pid}
     # Provider-native model calls receive only local action tools. Avoid recursion
     # and don't ask the model to invent API keys for provider discovery.
     tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve")]
@@ -317,30 +419,42 @@ def provider_chat(data, emit=None):
                 if item["role"]=="system": system += "\n"+item["content"]; continue
                 contents.append({"role":"model" if item["role"]=="assistant" else "user","parts":[{"text":item["content"]}]})
             function_declarations=[{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]} for tool in tool_catalog]
-            url=provider["base_url"]+"/models/"+quote(model,safe="")+":generateContent?key="+quote(api_key,safe="")
+            method=":streamGenerateContent?alt=sse&key=" if emit else ":generateContent?key="
+            url=provider["base_url"]+"/models/"+quote(model,safe="")+method+quote(api_key,safe="")
             headers={"Content-Type":"application/json"}
             for _ in range(9):
+                if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 payload={"contents":contents,"generationConfig":{"temperature":0.3},"tools":[{"functionDeclarations":function_declarations}]}
                 if system: payload["systemInstruction"]={"parts":[{"text":system}]}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
-                with urlopen(request,timeout=timeout) as response: raw=json.loads(response.read(3_000_000).decode())
-                candidates=raw.get("candidates") or []
-                candidate=candidates[0] if candidates else {}
-                model_content=candidate.get("content") or {}
-                parts=model_content.get("parts") or []
-                calls=[part.get("functionCall") for part in parts if isinstance(part,dict) and isinstance(part.get("functionCall"),dict)]
+                request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
+                with urlopen(request,timeout=request_timeout) as response:
+                    if emit:
+                        message=read_gemini_stream(response,emit,deadline)
+                        model_content=message.get("provider_content") or {"role":"model","parts":[{"text":message.get("content","")}]}
+                        calls=[{"name":call["function"]["name"],"args":json.loads(call["function"]["arguments"])} for call in message.get("tool_calls",[])]
+                    else:
+                        raw=json.loads(response.read(3_000_000).decode())
+                        candidates=raw.get("candidates") or []
+                        candidate=candidates[0] if candidates else {}
+                        model_content=candidate.get("content") or {}
+                        parts=model_content.get("parts") or []
+                        calls=[part.get("functionCall") for part in parts if isinstance(part,dict) and isinstance(part.get("functionCall"),dict)]
                 if not calls:
-                    answer="".join(str(part.get("text","")) for part in parts if isinstance(part,dict))
+                    answer=message.get("content","") if emit else "".join(str(part.get("text","")) for part in parts if isinstance(part,dict))
                     break
                 contents.append(model_content)
                 tool_responses=[]
                 for call in calls[:12]:
                     tool_name=str(call.get("name",""))
                     arguments=call.get("args") or {}
+                    if emit: emit({"type":"tool_call","name":tool_name})
                     try: tool_result=dispatch_mcp_tool(tool_name,arguments)
                     except Exception as exc: tool_result={"error":str(exc)[:1500]}
                     if isinstance(tool_result,dict) and tool_result.get("permission_required"):
+                        if emit: emit({"type":"approval_required","command":str(tool_result.get("command",""))})
                         return 200,{"ok":True,"permission_required":True,"command":str(tool_result.get("command",""))}
+                    if emit: emit({"type":"tool_result","name":tool_name,"summary":"Tool returned an error" if isinstance(tool_result,dict) and tool_result.get("error") else "Tool completed"})
                     tool_responses.append({"functionResponse":{"name":tool_name,"response":{"result":tool_result}}})
                 contents.append({"role":"user","parts":tool_responses})
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
@@ -353,22 +467,32 @@ def provider_chat(data, emit=None):
             url=provider["base_url"]+"/messages"
             headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"}
             for _ in range(9):
-                payload={"model":model,"max_tokens":4096,"messages":msgs,"tools":tools}
+                if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
+                payload={"model":model,"max_tokens":4096,"messages":msgs,"tools":tools,"stream":bool(emit)}
                 if system_parts: payload["system"]="\n\n".join(system_parts)
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
-                with urlopen(request,timeout=timeout) as response: raw=json.loads(response.read(3_000_000).decode())
-                blocks=raw.get("content") or []
+                request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
+                with urlopen(request,timeout=request_timeout) as response:
+                    if emit:
+                        message=read_anthropic_stream(response,emit,deadline)
+                        blocks=message.get("provider_content") or []
+                    else:
+                        raw=json.loads(response.read(3_000_000).decode())
+                        blocks=raw.get("content") or []
                 tool_uses=[block for block in blocks if isinstance(block,dict) and block.get("type")=="tool_use"]
                 if not tool_uses:
-                    answer="".join(str(block.get("text","")) for block in blocks if isinstance(block,dict) and block.get("type")=="text")
+                    answer=message.get("content","") if emit else "".join(str(block.get("text","")) for block in blocks if isinstance(block,dict) and block.get("type")=="text")
                     break
                 msgs.append({"role":"assistant","content":blocks})
                 results=[]
                 for call in tool_uses[:12]:
+                    if emit: emit({"type":"tool_call","id":str(call.get("id","")),"name":str(call.get("name",""))})
                     try: result=dispatch_mcp_tool(str(call.get("name","")),call.get("input") or {})
                     except Exception as exc: result={"error":str(exc)[:1500]}
                     if isinstance(result,dict) and result.get("permission_required"):
+                        if emit: emit({"type":"approval_required","command":str(result.get("command",""))})
                         return 200,{"ok":True,"permission_required":True,"command":str(result.get("command",""))}
+                    if emit: emit({"type":"tool_result","id":str(call.get("id","")),"name":str(call.get("name","")),"summary":"Tool returned an error" if isinstance(result,dict) and result.get("error") else "Tool completed"})
                     results.append({"type":"tool_result","tool_use_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
                 msgs.append({"role":"user","content":results})
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."

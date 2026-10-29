@@ -115,6 +115,84 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(json.loads(message["tool_calls"][0]["function"]["arguments"]),{"command":"pwd"})
         self.assertEqual([item["text"] for item in emitted], ["hello ","world"])
 
+    def test_gemini_stream_collects_text_and_partial_function_args(self):
+        chunks=[
+            {"candidates":[{"content":{"parts":[{"text":"hello "}]}}]},
+            {"candidates":[{"content":{"parts":[{"text":"world"},{"thoughtSignature":"sig","functionCall":{"name":"termux_exec","args":{"command":"pwd"}}}]}}]},
+        ]
+        raw=b"".join(("data: "+json.dumps(chunk)+"\n\n").encode() for chunk in chunks)
+        emitted=[]
+        message=mcp_server.read_gemini_stream(io.BytesIO(raw),emitted.append,time.monotonic()+5)
+        self.assertEqual(message["content"],"hello world")
+        self.assertEqual(message["provider_content"]["role"],"model")
+        self.assertEqual(message["provider_content"]["parts"][2]["thoughtSignature"],"sig")
+        self.assertEqual(message["tool_calls"][0]["function"]["name"],"termux_exec")
+        self.assertEqual(json.loads(message["tool_calls"][0]["function"]["arguments"]),{"command":"pwd"})
+        self.assertEqual([item["text"] for item in emitted],["hello ","world"])
+
+    def test_anthropic_stream_collects_text_and_tool_json(self):
+        events=[
+            ("content_block_start",{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            ("content_block_delta",{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}),
+            ("content_block_start",{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"termux_exec","input":{}}}),
+            ("content_block_delta",{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":'{"command":"pwd"}'}}),
+            ("message_stop",{"type":"message_stop"}),
+        ]
+        raw=b"".join(("event: "+name+"\ndata: "+json.dumps(payload)+"\n\n").encode() for name,payload in events)
+        emitted=[]
+        message=mcp_server.read_anthropic_stream(io.BytesIO(raw),emitted.append,time.monotonic()+5)
+        self.assertEqual(message["content"],"hello")
+        self.assertEqual(message["tool_calls"][0]["id"],"tool-1")
+        self.assertEqual(message["tool_calls"][0]["function"]["name"],"termux_exec")
+        self.assertEqual(json.loads(message["tool_calls"][0]["function"]["arguments"]),{"command":"pwd"})
+        self.assertEqual([item["text"] for item in emitted],["hello"])
+
+    def test_native_provider_stream_requests(self):
+        responses={
+            "gemini":b'data: {"candidates":[{"content":{"parts":[{"text":"Gemini"}]}}]}\n\n',
+            "anthropic":b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Claude"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
+        }
+        for provider,expected_text in (("gemini","Gemini"),("anthropic","Claude")):
+            requests=[]
+            def fake_urlopen(request,timeout):
+                requests.append((request,timeout))
+                return io.BytesIO(responses[provider])
+            with self.subTest(provider=provider), \
+                    patch.object(mcp_server,"readj",return_value={"value":"test-api-key"}), \
+                    patch.object(mcp_server,"urlopen",side_effect=fake_urlopen):
+                events=[]
+                status,result=mcp_server.provider_chat({"provider":provider,"model":"test-model","messages":[{"role":"user","content":"hello"}]},events.append)
+            self.assertEqual(status,200)
+            self.assertEqual(result["content"],expected_text)
+            request_payload=json.loads(requests[0][0].data)
+            if provider=="anthropic": self.assertTrue(request_payload["stream"])
+            self.assertIn(":streamGenerateContent?alt=sse&key=test-api-key" if provider=="gemini" else "/messages",requests[0][0].full_url)
+            self.assertIn({"type":"token","text":expected_text},events)
+
+    def test_native_provider_tool_calls_keep_command_approval_gate(self):
+        anthropic_events=[
+            ("content_block_start",{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"termux_exec","input":{}}}),
+            ("content_block_delta",{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":json.dumps({"command":"echo safe"})}}),
+            ("message_stop",{"type":"message_stop"}),
+        ]
+        responses={
+            "gemini":b'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"termux_exec","args":{"command":"echo safe"}}}]}}]}\n\n',
+            "anthropic":b"".join(("event: "+name+"\ndata: "+json.dumps(payload)+"\n\n").encode() for name,payload in anthropic_events),
+        }
+        for provider in ("gemini","anthropic"):
+            with self.subTest(provider=provider), \
+                    patch.object(mcp_server,"readj",return_value={"value":"test-api-key"}), \
+                    patch.object(mcp_server,"urlopen",return_value=io.BytesIO(responses[provider])) as urlopen_mock, \
+                    patch.object(mcp_server,"dispatch_mcp_tool",return_value={"permission_required":True,"command":"echo safe"}) as dispatch_mock:
+                events=[]
+                status,result=mcp_server.provider_chat({"provider":provider,"model":"test-model","messages":[{"role":"user","content":"run a command"}]},events.append)
+            self.assertEqual(status,200)
+            self.assertTrue(result["permission_required"])
+            self.assertEqual(result["command"],"echo safe")
+            urlopen_mock.assert_called_once()
+            dispatch_mock.assert_called_once_with("termux_exec",{"command":"echo safe"})
+            self.assertIn({"type":"approval_required","command":"echo safe"},events)
+
     def test_initialize_and_tool_catalog(self):
         status, response = self.rpc("initialize", {
             "protocolVersion": "2025-03-26",
