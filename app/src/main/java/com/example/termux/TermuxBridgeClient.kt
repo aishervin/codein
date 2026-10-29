@@ -3,6 +3,7 @@ package com.example.termux
 import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
@@ -134,6 +135,7 @@ class TermuxBridgeClient(context: Context) {
     }
 
     /** Stream provider events; providers without native SSE support fall back to the legacy route. */
+    @OptIn(InternalCoroutinesApi::class)
     suspend fun chatStream(
         provider: String,
         model: String,
@@ -154,7 +156,7 @@ class TermuxBridgeClient(context: Context) {
                     doOutput = true
                 }
                 val requestJob = currentCoroutineContext()[Job]
-                val cancellation = requestJob?.invokeOnCompletion { connection.disconnect() }
+                val cancellation = requestJob?.invokeOnCompletion(onCancelling = true) { connection.disconnect() }
                 try {
                     val payload = JSONObject()
                         .put("provider", provider)
