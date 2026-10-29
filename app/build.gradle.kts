@@ -4,8 +4,8 @@ plugins {
     alias(libs.plugins.roborazzi)
 }
 
-val requestedVersionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 19
-val requestedVersionName = providers.gradleProperty("versionName").orNull ?: "1.0.9"
+val requestedVersionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 20
+val requestedVersionName = providers.gradleProperty("versionName").orNull ?: "1.1.0"
 val keyStorePath = System.getenv("KEYSTORE_PATH")
 val releaseStorePassword = System.getenv("STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("KEY_ALIAS")

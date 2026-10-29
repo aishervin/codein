@@ -6,7 +6,7 @@ on:
       release_tag:
         description: "Release tag, for example v1.0.0"
         required: true
-        default: "v1.0.9"
+        default: "v1.1.0"
         type: string
       version_name:
         description: "Android versionName; leave empty to derive it from the tag"
@@ -16,7 +16,7 @@ on:
       version_code:
         description: "Integer versionCode; must increase for every update"
         required: true
-        default: "19"
+        default: "20"
         type: string
       prerelease:
         description: "Mark the GitHub Release as a pre-release"
@@ -24,9 +24,6 @@ on:
         default: false
         type: boolean
   push:
-    branches: [main]
-    paths:
-      - ".github/workflows/android-release.yml"
     tags:
       - "v*"
 
@@ -41,6 +38,7 @@ jobs:
       RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
       RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
       RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+      COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -83,10 +81,10 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${INPUT_TAG:-${GITHUB_REF_NAME}}"
-          if [[ "$TAG" == "main" ]]; then TAG="v1.0.9"; fi
+          if [[ "$TAG" == "main" ]]; then TAG="v1.1.0"; fi
           [[ "$TAG" == v* ]] || { echo "Tag must start with v: $TAG"; exit 1; }
           VERSION_NAME="${INPUT_VERSION_NAME:-${TAG#v}}"
-          VERSION_CODE="${INPUT_VERSION_CODE:-19}"
+          VERSION_CODE="${INPUT_VERSION_CODE:-20}"
           [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo "version_code must be an integer"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
@@ -110,7 +108,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           set -o pipefail
-          bash ./gradlew assembleRelease --no-daemon --stacktrace --console=plain -PversionName="${{ steps.release.outputs.version_name }}" -PversionCode="${{ steps.release.outputs.version_code }}" 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
+          bash ./gradlew assembleRelease --no-daemon --stacktrace --console=plain -PversionName="${{ steps.release.outputs.version_name }}" -PversionCode="${{ steps.release.outputs.version_code }}" -PCOMPOSIO_API_KEY="$COMPOSIO_API_KEY" 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
 
       - name: Upload Gradle failure log
         if: failure()

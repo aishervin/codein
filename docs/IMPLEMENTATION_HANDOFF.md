@@ -14,7 +14,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Live panel now shows colored waiting/receiving/tool/approval/completed stages and elapsed time; list auto-scroll includes the stage panel.
 - [x] When provider output is pending, the live stage remains on “waiting for model” while a timer advances; stage changes reflect actual server response and tool events.
 - [x] Agent Room reorganized into Models / Services / Composio / Report tabs; advanced OpenCode controls are collapsed, service/API key fields are masked, and report shows only event timestamp/kind.
-- [x] SSE Kotlin client/UI is committed but not compiled (build prohibited); old-server streaming fallback remains.
+- [x] SSE Kotlin client/UI has old-server streaming fallback; compile verification is pending.
 - [x] Gemini `streamGenerateContent` and Anthropic Messages SSE are parsed natively, including tool calls and the existing command approval gate.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
@@ -22,7 +22,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - Persian UI; English code and commit messages.
 - Do not alter Hero/Zero or Dolphin (`chat.dphn.ai`); scope changes to Agent Room/Termux.
 - Preserve `applicationId`, namespace, signing and existing user behavior.
-- Work directly on `main`, make small commits and push to GitHub. Never run or trigger a build/release. Use `[skip ci]` in pushed commit messages because current push workflows otherwise build.
+- Work directly on `main`, make small commits and push to GitHub. The earlier no-build restriction was superseded: the user explicitly authorized building and publishing Codein 1.1.0. Avoid unintended workflow runs; release only through the reviewed manual workflow.
 - Preserve command approval. `termux_exec` requires a recorded approval for the exact command; the UI first records approval, then executes it.
 - Do not remove existing features without checking their callers/contracts. Preserve user changes.
 - Composio key is embedded through `BuildConfig`; prefs alone do not make an APK-embedded secret secure. Do not remove/migrate it until a backward-compatible replacement exists.
@@ -71,7 +71,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 
 ### 5. Docs, verification, commits
 - [x] Update Agent Room design doc; bootstrap already fetches server from `main`, so no installer change is required.
-- [x] Run Python/unit/bash checks only; do not run Gradle, APK build, release or workflow.
+- [x] Run the Termux unit suite after the latest changes (11 tests pass); local Kotlin compilation was attempted but this workspace has no Java runtime.
 - [x] Review diff for approval bypass, unintended Hero/Zero/Dolphin changes, identifier/signing changes and secrets.
 - [x] Update this checklist and `outputs/codein-handoff.md` with facts, tests and commit hashes.
 - [x] Commit each coherent chunk on `main`, English scoped message plus `[skip ci]`; verify pushes do not start Actions.
@@ -80,14 +80,14 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 1. Consider real provider network/timeout/disconnect tests if credentials and external calls are explicitly in scope.
 2. Review Kotlin changes again if they are modified; compile only if the user later permits it.
 3. Finish Composio review only if its OAuth flow is part of the next requested scope.
-4. Keep handoffs updated and commit small chunks with `[skip ci]`; never build/release.
+4. Finish WebView Termux structured-tool integration and release workflow hardening; commit to `main`, then run the authorized signed v1.1.0 release workflow and verify its APK.
 
 ## Acceptance criteria
 - Provider tokens appear incrementally; old endpoints still work.
 - A transient heartbeat failure does not flap status; idle bridge remains responsive.
 - Stopping cancels streaming; command execution still requires explicit approval.
 - Hero/Zero/Dolphin and application identifiers remain unchanged.
-- Lightweight tests pass; no build/release/Actions run; commits are recorded below.
+- Lightweight tests pass; signed v1.1.0 release workflow succeeds and its APK is published; commits and workflow run are recorded below.
 
 ## Commits / verification
 - `738a8d10eb550249df0d3e2fd00e45ce791736d6` — handoff committed to GitHub `main` (`[skip ci]`).

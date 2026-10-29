@@ -208,6 +208,7 @@ internal fun TerminalTracePanel(command: String, output: String, exitCode: Int) 
 @Composable
 internal fun TermuxPermissionPanel(
     command: String,
+    reason: String = "",
     onAllowOnce: () -> Unit,
     onAlwaysAllow: () -> Unit,
     onDeny: () -> Unit
@@ -225,6 +226,7 @@ internal fun TermuxPermissionPanel(
                 fontSize = 11.sp,
                 lineHeight = 16.sp
             )
+            if (reason.isNotBlank()) Text(reason, color = NeonOrangeSoft, fontSize = 11.sp, lineHeight = 16.sp)
             Text(
                 command,
                 color = MaterialTheme.colorScheme.onSurface,
