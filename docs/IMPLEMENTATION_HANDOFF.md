@@ -7,7 +7,9 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Review report created: `outputs/codein-review.html` (workspace deliverable).
 - [x] Initial Git status checked: clean `main`, HEAD `0bc77f2` (`Build main artifacts as Codein 1.0.9`).
 - [x] Agent Room heartbeat hardened locally: 2-second MCP ping; after first success, two transient errors do not flap UI status.
-- [ ] Heartbeat code chunk not yet committed to GitHub; no tests/build/release/Actions run.
+- [x] Added authenticated SSE endpoint for OpenAI-compatible providers; legacy `/api/chat` and MCP route remain unchanged.
+- [x] SSE framing/auth test added; all six Termux tests pass; Python syntax check passes.
+- [ ] Android is not yet consuming SSE; Gemini/Anthropic streaming not implemented. No build/release/Actions run.
 - [x] This handoff is in `docs/IMPLEMENTATION_HANDOFF.md`.
 
 ## User requirements
@@ -22,7 +24,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 ## Relevant files and findings
 - `app/src/main/java/com/example/ui/MainScreen.kt`: main chat + `TermuxAgentRoomDialog` (~1881); Termux connection state near lines 362-383.
 - `app/src/main/java/com/example/termux/TermuxBridgeClient.kt`: MCP and REST client; `ping()` already calls lightweight MCP `ping`.
-- `termux/server.py`: providers, non-streaming `provider_chat`, command approval/execute, MCP and REST handlers.
+- `termux/server.py`: providers, legacy non-streaming chat, new SSE route for OpenAI-compatible providers, command approval/execute, MCP and REST handlers.
 - `termux/codein-bootstrap.sh`: downloads server from `main` and restarts it.
 - `app/src/main/java/com/example/ui/AgentTracePanels.kt`, `app/src/main/java/com/example/ui/components/CodeinSheets.kt`, `termux/composio_connect.py`, `.github/workflows/*.yml`, `docs/`.
 - Connection check is MCP `ping` every 12 seconds, not `initialize` + `tools/list`. Heartbeat change uses a 2-second timeout and suppresses two failures only after the first successful ping.
@@ -36,11 +38,12 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - [x] Keep this checklist in project and refresh before/after each commit.
 
 ### 2. Termux server streaming
-- [ ] Add authenticated `POST /api/chat/stream` with flushed SSE JSON frames and stable event schema (`status`, `token`, `tool_call`, `tool_result`, `approval_required`, `command_output`, `error`, `done`).
-- [ ] Add provider-native streaming only where supported; preserve existing `/api/chat` and MCP `provider_chat` behavior.
-- [ ] Retain provider tool loops and exact-command approval gate; never execute a command just because it was proposed.
+- [x] Add authenticated `POST /api/chat/stream` with flushed SSE JSON frames (`status`, `token`, `tool_call`, `tool_result`, `approval_required`, `error`, `done`).
+- [x] Stream OpenAI-compatible providers; preserve existing `/api/chat` and MCP `provider_chat` behavior.
+- [ ] Add native streaming for Gemini and Anthropic (currently return a clear unsupported-provider event).
+- [x] Retain provider tool loop and exact-command approval gate; proposed commands still stop at `approval_required`.
 - [ ] Bound iterations and total time; detect client disconnect and stop upstream work when practical.
-- [ ] Add focused stdlib unit tests for SSE framing, errors, auth and approval behavior.
+- [x] Add stdlib SSE framing/auth tests; existing tests cover exact-command approval. Re-run after future server edits.
 
 ### 3. Android streaming and connection stability
 - [ ] Implement robust SSE line/event parsing (partial chunks, UTF-8, multiple events) and cancelable HTTP request in `TermuxBridgeClient`.
@@ -80,5 +83,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 
 ## Commits / verification
 - `738a8d10eb550249df0d3e2fd00e45ce791736d6` — handoff committed to GitHub `main` (`[skip ci]`).
-- Heartbeat hardening: local changes pending GitHub commit.
-- No tests/build/release/Actions run.
+- `22653fe9bca2c65a1945b2a8aa4d7bd21b8a1ee0` — heartbeat hardening committed to GitHub `main` (`[skip ci]`).
+- SSE server + tests: local changes pending GitHub commit.
+- `python3 -m unittest termux/test_mcp.py` — 6 tests passed; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
+- No Gradle/APK build, release or workflow run.

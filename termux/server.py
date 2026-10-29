@@ -251,7 +251,39 @@ def dispatch_mcp_tool(name, args):
         return {"ok":False,"error":"Invalid action"}
     raise ValueError("Unknown MCP tool: "+str(name))
 
-def provider_chat(data):
+def read_openai_stream(response, emit):
+    content=[]
+    calls={}
+    for raw_line in response:
+        line=raw_line.decode("utf-8",errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        payload=line[5:].strip()
+        if payload=="[DONE]":
+            break
+        try: chunk=json.loads(payload)
+        except ValueError: continue
+        choices=chunk.get("choices") or []
+        if not choices: continue
+        delta=choices[0].get("delta") or {}
+        text=delta.get("content")
+        if isinstance(text,str) and text:
+            content.append(text)
+            emit({"type":"token","text":text})
+        for item in delta.get("tool_calls") or []:
+            if not isinstance(item,dict): continue
+            index=item.get("index",0)
+            call=calls.setdefault(index,{"id":"","type":"function","function":{"name":"","arguments":""}})
+            if item.get("id"): call["id"]+=str(item["id"])
+            function=item.get("function") or {}
+            call["function"]["name"]+=str(function.get("name") or "")
+            call["function"]["arguments"]+=str(function.get("arguments") or "")
+    message={"role":"assistant","content":"".join(content)}
+    if calls:
+        message["tool_calls"]=[calls[key] for key in sorted(calls)]
+    return message
+
+def provider_chat(data, emit=None):
     pid=str(data.get("provider","")).strip().lower()
     provider=PROVIDERS.get(pid)
     if not provider: return 400,{"ok":False,"error":"Unknown provider","providers":list(PROVIDERS)}
@@ -270,6 +302,8 @@ def provider_chat(data):
         if content: clean.append({"role":role,"content":content[:50000]})
     system=str(data.get("system",""))[:30000]
     timeout=max(10,min(int(data.get("timeout",120)),180))
+    if emit and provider["kind"]!="openai":
+        return 501,{"ok":False,"error":"Streaming is not yet supported for this provider","provider":pid}
     # Provider-native model calls receive only local action tools. Avoid recursion
     # and don't ask the model to invent API keys for provider discovery.
     tool_catalog=[tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","credential_save","termux_command_approve")]
@@ -343,11 +377,15 @@ def provider_chat(data):
             url=provider["base_url"].rstrip("/")+"/chat/completions"
             headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key}
             for _ in range(9):
-                payload={"model":model,"messages":msgs,"stream":False,"tools":tools,"tool_choice":"auto"}
+                payload={"model":model,"messages":msgs,"stream":bool(emit),"tools":tools,"tool_choice":"auto"}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
-                with urlopen(request,timeout=timeout) as response: raw=json.loads(response.read(3_000_000).decode())
-                choices=raw.get("choices") or []
-                message=(choices[0].get("message") or {}) if choices else {}
+                with urlopen(request,timeout=timeout) as response:
+                    if emit:
+                        message=read_openai_stream(response,emit)
+                    else:
+                        raw=json.loads(response.read(3_000_000).decode())
+                        choices=raw.get("choices") or []
+                        message=(choices[0].get("message") or {}) if choices else {}
                 calls=message.get("tool_calls") or []
                 if not calls:
                     answer=str(message.get("content") or "")
@@ -356,16 +394,20 @@ def provider_chat(data):
                 for call in calls[:12]:
                     function=call.get("function") or {}
                     name=str(function.get("name",""))
+                    if emit: emit({"type":"tool_call","id":str(call.get("id","")),"name":name})
                     try: arguments=json.loads(function.get("arguments") or "{}")
                     except ValueError: arguments={}
                     try: result=dispatch_mcp_tool(name,arguments)
                     except Exception as exc: result={"error":str(exc)[:1500]}
                     if isinstance(result,dict) and result.get("permission_required"):
+                        if emit: emit({"type":"approval_required","command":str(result.get("command",""))})
                         return 200,{"ok":True,"permission_required":True,"command":str(result.get("command",""))}
+                    if emit: emit({"type":"tool_result","id":str(call.get("id","")),"name":name,"summary":str(result)[:1000]})
                     msgs.append({"role":"tool","tool_call_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         if not answer: return 502,{"ok":False,"error":"Provider returned an empty response","provider":pid,"model":model}
         event("provider_chat_completed",{"provider":pid,"model":model})
+        if emit: emit({"type":"done","provider":pid,"model":model})
         return 200,{"ok":True,"provider":pid,"model":model,"content":answer}
     except HTTPError as exc:
         detail=""
@@ -486,6 +528,25 @@ class Handler(BaseHTTPRequestHandler):
         p=urlparse(self.path).path
         try: data=self.body()
         except Exception as e: return self.sendj(400,{"ok":False,"error":"Invalid JSON","detail":str(e)})
+        if p=="/api/chat/stream":
+            self.send_response(200)
+            self.send_header("Content-Type","text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control","no-cache, no-transform")
+            self.send_header("X-Accel-Buffering","no")
+            self.send_header("Connection","keep-alive")
+            self.send_header("Access-Control-Allow-Origin","*")
+            self.end_headers()
+            try:
+                self.send_sse({"type":"status","status":"starting"})
+                status,result=provider_chat(data,self.send_sse)
+                if status!=200:
+                    self.send_sse({"type":"error","error":result.get("error","Chat failed"),"detail":result.get("detail","")})
+            except (BrokenPipeError,ConnectionResetError):
+                return
+            except Exception as exc:
+                try: self.send_sse({"type":"error","error":"Streaming failed","detail":str(exc)[:500]})
+                except (BrokenPipeError,ConnectionResetError): pass
+            return
         if p=="/api/providers/models":
             status,result=discover_provider_models(data.get("provider"),data.get("api_key"))
             return self.sendj(status,result)
@@ -523,6 +584,11 @@ class Handler(BaseHTTPRequestHandler):
             event("command_finished",{"exit_code":result.get("exit_code"),"duration_ms":result.get("duration_ms")})
             return self.sendj(200,result)
         return self.sendj(404,{"ok":False,"error":"Unknown endpoint"})
+
+    def send_sse(self, payload):
+        frame=("data: "+json.dumps(payload,ensure_ascii=False,separators=(",",":"))+"\n\n").encode("utf-8")
+        self.wfile.write(frame)
+        self.wfile.flush()
 
 if __name__ == "__main__":
     if not TOKEN: raise SystemExit("Missing token. Re-run the Codein bootstrap to initialize ~/.codein/config.json.")

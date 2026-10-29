@@ -65,6 +65,39 @@ class McpTransportTests(unittest.TestCase):
         self.assertFalse(result.get("isError", False), result)
         return json.loads(result["content"][0]["text"])
 
+    def test_chat_stream_sends_flushed_sse_frames(self):
+        def fake_chat(data, emit):
+            emit({"type":"token","text":"hello"})
+            emit({"type":"done"})
+            return 200,{"ok":True}
+
+        with patch.object(mcp_server, "provider_chat", side_effect=fake_chat):
+            request=Request(self.url.replace("/mcp","/api/chat/stream"),data=b"{}",headers={
+                "Authorization":"Bearer mcp-test-token",
+                "Content-Type":"application/json"
+            },method="POST")
+            with urlopen(request,timeout=3) as response:
+                frames=[]
+                done_seen=False
+                while True:
+                    line=response.readline()
+                    if not line: break
+                    frames.append(line.decode("utf-8"))
+                    if done_seen and line in (b"\n",b"\r\n"): break
+                    if '"type":"done"' in line.decode("utf-8"): done_seen=True
+                body="".join(frames)
+                self.assertEqual(response.headers.get_content_type(),"text/event-stream")
+        self.assertIn('data: {"type":"token","text":"hello"}\n\n',body)
+        self.assertIn('data: {"type":"done"}\n\n',body)
+
+    def test_chat_stream_rejects_missing_token(self):
+        request=Request(self.url.replace("/mcp","/api/chat/stream"),data=b"{}",headers={
+            "Content-Type":"application/json"
+        },method="POST")
+        with self.assertRaises(HTTPError) as error:
+            urlopen(request,timeout=3)
+        self.assertEqual(error.exception.code,401)
+
     def test_initialize_and_tool_catalog(self):
         status, response = self.rpc("initialize", {
             "protocolVersion": "2025-03-26",
