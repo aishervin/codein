@@ -30,6 +30,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `app/src/main/java/com/example/ui/AgentTracePanels.kt`, `app/src/main/java/com/example/ui/components/CodeinSheets.kt`, `termux/composio_connect.py`, `.github/workflows/*.yml`, `docs/`.
 - Connection check is MCP `ping` every 12 seconds, not `initialize` + `tools/list`. Heartbeat change uses a 2-second timeout and suppresses two failures only after the first successful ping.
 - Push to `main` starts `android-ci.yml`; changes under `app/**` or workflow paths also match `android-main-build.yml`. `[skip ci]` is required to honor no-build instruction.
+- GitHub `main` is ahead of this workspace Git metadata: commits were created through the connected GitHub integration because local HTTPS push had no credentials. Local source files match the pushed code, but `git status` may show them as uncommitted relative to local `HEAD`; do not blindly push or reset. Compare with GitHub `main` before further Git operations.
 
 ## Checklist
 
@@ -85,5 +86,6 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - `22653fe9bca2c65a1945b2a8aa4d7bd21b8a1ee0` — heartbeat hardening committed to GitHub `main` (`[skip ci]`).
 - `0029e1203952fb1600d14e1f8aace3bbc77563e5` — OpenAI-compatible SSE server + tests committed to GitHub `main` (`[skip ci]`).
 - `ce1b510f02d070a1416e0372402ecafe18bacc6d` — Android SSE client/UI and server safety/time limit committed to GitHub `main` (`[skip ci]`).
+- `c427af68d83a8e889014be25e6f8e1d4bd7f300a` — previous handoff commit; exact SHA had 0 workflow runs.
 - `python3 -m unittest termux/test_mcp.py` — 7 tests passed; `python3 -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
 - `bash -n termux/codein-bootstrap.sh` — passed. Checked the exact commit SHA in GitHub Actions: 0 workflow runs. No Gradle/APK build or release; Kotlin compile remains unverified.
