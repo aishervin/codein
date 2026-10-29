@@ -135,5 +135,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - Termux server version is 1.2.0 and advertises logging capability for MCP stream events. Tests cover progress, final responses and cancellation.
 - The Termux installer stages and validates the complete update before replacing files, restarts the bridge, and verifies MCP version 1.2.0. Existing `config.json` token, API-key files, `ROOM.md`, `state.json`, and `.gitignore` are preserved.
 - Android app version is 1.2.0 / versionCode 21. Main-build workflow artifact is named `Codein-1.2.0-Universal.apk`; no public release/tag is created by this change.
-- Local verification: 20 Termux tests passed, 5 Worker tests passed, Python and shell syntax checks passed. Kotlin/Gradle build could not run because Java is unavailable; GitHub Actions must verify it.
+- Local verification: 20 Termux tests passed, 5 Worker tests passed, Python and shell syntax checks passed. GitHub Android CI and the 1.2.0 Main Build both succeeded on commit `638c8624fd9fd9a8519fa0560dc933df7a936ada`.
+- APK artifact: `Codein-1.2.0-Universal` from https://github.com/aishervin/codein/actions/runs/40965865626 (available until 2026-11-12). No GitHub Release or tag was created.
+- Kotlin/Gradle build could not run in this workspace because Java is unavailable; the successful Actions builds provide the Android compile verification.
 - Required device check after delivery: run the installer in Termux, re-enter the existing bridge token if needed, select the Termux provider model, verify Gemini/Composio and Stop; do not run a second service or manually execute `server.py`.
