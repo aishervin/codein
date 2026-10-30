@@ -35,6 +35,7 @@ fetch "termux/skills/telegram.md" "$ROOT/skills/telegram.md"
 fetch "termux/skills/providers-ai-google.md" "$ROOT/skills/providers-ai-google.md"
 fetch "termux/skills/development.md" "$ROOT/skills/development.md"
 fetch "termux/skills/web-research.md" "$ROOT/skills/web-research.md"
+fetch "termux/skills/codein-capabilities.md" "$ROOT/skills/codein-capabilities.md"
 fetch "docs/TOOL_DOCS_INDEX.md" "$ROOT/docs/TOOL_DOCS_INDEX.md"
 fetch "docs/AGENT_SYSTEM_PROMPT.md" "$ROOT/docs/AGENT_SYSTEM_PROMPT.md"
 fetch "termux/LIBRARIES.md" "$ROOT/docs/LIBRARIES.md"
@@ -88,6 +89,13 @@ Shared local context for every model and agent connected to Codein.
 7. Never print secret values into chat, logs, or workspace files.
 8. If a required credential is missing, ask for that exact credential, store it in the local vault, then continue.
 9. Check the shared vault before asking again.
+ROOM
+fi
+if ! grep -Fq "## Agent capability check" "$ROOT/ROOM.md"; then
+cat >> "$ROOT/ROOM.md" <<'ROOM'
+
+## Agent capability check
+Before acting, read `docs/AGENT_SYSTEM_PROMPT.md` and `skills/codein-capabilities.md`, then confirm the live MCP tools and connection state. Only claim local shell, workspace, credential, network, or browser-opening abilities when the corresponding tool/command is available. No root access is provided; opening a URL does not grant access to inspect the user's browser page.
 ROOM
 fi
 if [ ! -f "$ROOT/state.json" ]; then

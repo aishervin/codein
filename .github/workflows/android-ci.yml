@@ -51,6 +51,9 @@ jobs:
       - name: Regenerate trusted Gradle wrapper
         run: gradle wrapper --gradle-version 9.3.1 --distribution-type bin
 
+      - name: Run Android unit tests
+        run: bash ./gradlew --no-daemon :app:testDebugUnitTest
+
       - name: Build debug APK
         run: bash ./gradlew --no-daemon :app:assembleDebug
 

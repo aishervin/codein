@@ -16,7 +16,7 @@ on:
       version_code:
         description: "Integer versionCode; must increase for every update"
         required: true
-        default: "22"
+        default: "23"
         type: string
       prerelease:
         description: "Mark the GitHub Release as a pre-release"
@@ -84,7 +84,7 @@ jobs:
           if [[ "$TAG" == "main" ]]; then TAG="v1.3.0"; fi
           [[ "$TAG" == v* ]] || { echo "Tag must start with v: $TAG"; exit 1; }
           VERSION_NAME="${INPUT_VERSION_NAME:-${TAG#v}}"
-          VERSION_CODE="${INPUT_VERSION_CODE:-22}"
+          VERSION_CODE="${INPUT_VERSION_CODE:-23}"
           [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo "version_code must be an integer"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
@@ -134,6 +134,6 @@ jobs:
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: Codein ${{ steps.release.outputs.tag }}
-          generate_release_notes: true
           prerelease: ${{ inputs.prerelease || false }}
+          overwrite_files: true
           files: app/build/outputs/apk/release/Codein-${{ steps.release.outputs.version_name }}-Universal.apk
