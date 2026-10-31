@@ -1,0 +1,41 @@
+# Codein Initial Setup & Termux Optimization Package
+# Version: 1.0.0
+# Description: Initial setup script to configure Termux workspace, directories, and Agent Room state for Codein.
+
+## 1. Create Directory Structure
+mkdir -p ~/.codein/workspace
+mkdir -p ~/.codein/agents
+mkdir -p ~/.codein/keys
+mkdir -p ~/.codein/sessions
+mkdir -p ~/.codein/events
+mkdir -p ~/.codein/skills
+mkdir -p ~/.codein/tools
+mkdir -p ~/.codein/docs
+mkdir -p ~/.codein/logs
+
+## 2. Initialize Agent Room State
+cat << 'EOF' > ~/.codein/state.json
+{
+  "schema": 1,
+  "workspace": "Codein Agent Room",
+  "active_agent": null,
+  "active_project": null,
+  "last_task": "Initial setup via Codein Updates",
+  "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)",
+  "recent_changes": ["Termux workspace initialized"],
+  "active_sessions": []
+}
+EOF
+
+## 3. Package Check & Verification
+echo "Checking essential packages..."
+for pkg in python git curl; do
+  if ! command -v $pkg &> /dev/null; then
+    echo "Installing missing package: $pkg"
+    pkg install -y $pkg
+  else
+    echo "$pkg is already installed."
+  fi
+done
+
+echo "Termux environment and Codein Agent Room are successfully configured!"
