@@ -27,7 +27,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - Persian UI; English code and commit messages.
 - Do not alter Hero/Zero or Dolphin (`chat.dphn.ai`); scope changes to Agent Room/Termux.
 - Preserve `applicationId`, namespace, signing and existing user behavior.
-- Work directly on `main`, make small commits and push to GitHub. The earlier no-build restriction was superseded: the user explicitly authorized building and publishing Codein 1.1.0. Avoid unintended workflow runs; release only through the reviewed manual workflow.
+- Work directly on `main`, make small commits and push to GitHub. The user explicitly authorized building and publishing Codein 1.3.1 for this release task. Avoid unintended workflow runs; release only through an authorized workflow.
 - Preserve command approval. `termux_exec` requires a recorded approval for the exact command; the UI first records approval, then executes it.
 - Do not remove existing features without checking their callers/contracts. Preserve user changes.
 - The public Composio path must not embed a project key in `BuildConfig`; use the Worker. Preserve the local Termux consumer-key fallback for existing local users.
@@ -97,7 +97,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - A transient heartbeat failure does not flap status; idle bridge remains responsive.
 - Stopping cancels the provider response at the bridge; command execution still requires explicit approval.
 - Hero/Zero/Dolphin and application identifiers remain unchanged.
-- Lightweight tests pass; signed v1.1.0 release workflow succeeds and its APK is published; commits and workflow run are recorded below.
+- Lightweight tests pass; signed v1.3.1 release workflow succeeds and its APK is published; commits and workflow run are recorded below.
 
 ## Commits / verification
 - `738a8d10eb550249df0d3e2fd00e45ce791736d6` — handoff committed to GitHub `main` (`[skip ci]`).
@@ -115,7 +115,7 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - Earlier baseline: `python3 -B -m unittest termux/test_mcp.py` — 13 tests passed; `python3 -B -m py_compile termux/server.py termux/test_mcp.py` — passed; `git diff --check` — passed.
 - `fdf6203` — cancel Codein streams, manage Termux/OpenCode lifecycle, Gemini schema/error handling; committed locally on `main` with `[skip ci]`. This commit has not been pushed; local GitHub write credentials are unavailable, and the connected integration commit request exceeded this environment's argument-size limit.
 - `python3 -B -m unittest termux/test_mcp.py` — 16 tests passed; Python `compile()` syntax checks, `bash -n termux/codein-bootstrap.sh termux/codein-bridge termux/codein-opencode`, and `git diff --check` passed. Local Kotlin compilation is unavailable because Java/Gradle are absent.
-- The authorized GitHub Android Release workflow previously built the signed APK and published v1.1.0. No workflow has run for the local commit.
+- Historical note (2026-10-29): the authorized GitHub Android Release workflow built the signed APK and published v1.1.0.
 - Android Release run `40909550882` — success on `bd5a87f57d870e6c9833590bb01144e5d228ed10`. Published `Codein-1.1.0-Universal.apk` (10,946,816 bytes); release: https://github.com/aishervin/codein/releases/tag/v1.1.0 . That historical APK build included the `COMPOSIO_API_KEY` build field; rotate any key previously injected there before using it again. Secret values were not accessed.
 
 ## Current Composio Worker handoff (2026-10-29)
@@ -140,3 +140,11 @@ Update this file after each completed work chunk. Keep it in sync with `outputs/
 - Kotlin/Gradle build could not run in this workspace because Java is unavailable; the successful Actions builds provide the Android compile verification.
 - Required device check after delivery: run the installer in Termux, re-enter the existing bridge token if needed, select the Termux provider model, verify Gemini/Composio and Stop; do not run a second service or manually execute `server.py`.
 - Follow-up fix: the first Termux updater run hit `bash: line 18: remote: unbound variable` before downloads or replacements. The `fetch()` helper now declares then assigns each variable sequentially. Use a commit-pinned script URL to avoid a stale cached `main` response; local data remains untouched until downloads validate.
+
+## Interactive Browser and 1.3.1 Release (2026-10-31)
+- Added the visible in-app WebView and assistant browser protocol. Navigation and page inspection are visible; clicks, field entry, and local/private navigation require one-time approval. Saved credentials are only filled into password fields and are never returned to the model.
+- Commit `d4bea7e5a121a20eb97868d1862617b38367b0b1` added the browser, tests, safety docs, and release settings. Robolectric initially failed because Android SDK 36 requires Java 21; the CI job uses Java 17. Test config now uses SDK 35 in commit `f8a176ac852abcca3c1f4b713fe8403046b9392f`.
+- Android CI run `41228727661` succeeded; Android Main Build run `41228727676` succeeded. The Android release build, including Kotlin compilation, succeeded in both the Main Build and release workflow.
+- Android Release run `41228896617` succeeded. Tag `v1.3.1` points to `f8a176ac852abcca3c1f4b713fe8403046b9392f`; published release: https://github.com/aishervin/codein/releases/tag/v1.3.1 .
+- Published asset `Codein-1.3.1-Universal.apk` is 10,995,968 bytes. A local copy is available at `outputs/Codein-1.3.1-Universal.apk`; ZIP integrity check passed. The release uses versionCode 24.
+- Local Kotlin/Gradle compilation remains unavailable because this workspace has no Java installation; GitHub Actions verified the build and tests.
