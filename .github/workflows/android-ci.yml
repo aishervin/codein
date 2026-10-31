@@ -52,7 +52,7 @@ jobs:
         run: gradle wrapper --gradle-version 9.3.1 --distribution-type bin
 
       - name: Test clickable chat links
-        run: bash ./gradlew --no-daemon :app:testDebugUnitTest --tests com.example.ChatLinksTest --tests com.example.InteractiveBrowserTest
+        run: bash ./gradlew --no-daemon :app:testDebugUnitTest --tests com.example.ChatLinksTest --tests com.example.InteractiveBrowserTest --tests com.example.CodeinUpdateCatalogTest
 
       - name: Build debug APK
         run: bash ./gradlew --no-daemon :app:assembleDebug

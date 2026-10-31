@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
@@ -48,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +70,7 @@ import kotlin.coroutines.resume
 
 internal const val BROWSER_ACTION_START = "[[CODEIN_BROWSER_REQUEST:v1]]"
 internal const val BROWSER_ACTION_END = "[[/CODEIN_BROWSER_REQUEST]]"
+internal val CodeinBrowserBlue = Color(0xFF42A5F5)
 
 internal data class BrowserPageState(
     val url: String = "",
@@ -365,6 +368,15 @@ internal fun CodeinBrowserToolbar(
                         Icon(Icons.Default.Refresh, "Reload", tint = MaterialTheme.colorScheme.onSurface)
                     }
                     Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onClose, enabled = canClose) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.Chat, contentDescription = null, tint = CodeinBrowserBlue, modifier = Modifier.size(17.dp))
+                            Text("Chat", color = CodeinBrowserBlue, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
                     IconButton(onClick = onClose, enabled = canClose, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Default.Close, "Close browser", tint = MaterialTheme.colorScheme.onSurface)
                     }
