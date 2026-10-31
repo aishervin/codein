@@ -1,0 +1,1 @@
+Codein update files are plain text. Add one .txt file for each package.
