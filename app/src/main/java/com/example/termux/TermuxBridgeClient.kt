@@ -416,6 +416,12 @@ class TermuxBridgeClient(context: Context) {
     suspend fun refreshComposioTools(): JSONObject =
         mcpTool("composio_tools_refresh", JSONObject(), 90)
 
+    /** Generate a Composio connection redirect URL for a service/toolkit. */
+    suspend fun linkComposioService(toolkit: String): String {
+        val result = mcpTool("composio_service_link", JSONObject().put("toolkit", toolkit), 45)
+        return result.optString("redirect_url").ifBlank { result.optString("url") }
+    }
+
     private suspend fun mcpTool(name: String, arguments: JSONObject, timeoutSeconds: Int = 45): JSONObject {
         val result = mcpRequest("tools/call", JSONObject().put("name", name).put("arguments", arguments), timeoutSeconds)
         if (result.optBoolean("isError")) {

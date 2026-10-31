@@ -143,3 +143,19 @@ def call_tool(name, arguments, config=None):
     if result.get("result_type") == "failed":
         return {"error": str(result.get("error") or "Composio tool failed")[:1000]}
     return result.get("data", result)
+
+
+def link_service(toolkit, config=None):
+    config = config or read_config()
+    if not config.get("worker_url") or not config.get("token"):
+        raise RuntimeError("Composio Platform is not configured in Codein.")
+    result = request(config["worker_url"], "/v1/link", config["token"], {
+        "session_id": config.get("session_id"),
+        "toolkit": toolkit,
+    }, timeout=60)
+    session_id = str(result.pop("session_id", ""))
+    if session_id and session_id != config.get("session_id"):
+        config["session_id"] = session_id
+        save_config(config)
+    return result
+

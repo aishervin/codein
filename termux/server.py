@@ -188,6 +188,7 @@ def mcp_tools_catalog():
     local_tools = [
         {"name":"composio_platform_configure","description":"Set up Codein's Composio Platform Worker and create or reuse this Termux installation's private Composio identity. The Worker address is supplied by the app; never ask the user for a Composio API key.","inputSchema":{"type":"object","properties":{"worker_url":{"type":"string","description":"The HTTPS workers.dev address configured by the Codein app."}}, "required":["worker_url"]}},
         {"name":"composio_tools_refresh","description":"Discover Composio session tools for this installation's private user identity.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"composio_service_link","description":"Generate a Composio connection redirect URL for a service/toolkit.","inputSchema":{"type":"object","properties":{"toolkit":{"type":"string","description":"Toolkit slug (e.g. github, slack)"}},"required":["toolkit"]}},
         {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. This tool requires explicit user approval for each command.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
         {"name":"termux_command_approve","description":"Record user approval for the exact shell command shown in the app permission prompt. Do not call unless the user explicitly approved it.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Exact command approved by the user"},"always":{"type":"boolean","default":False,"description":"Persist approval for this exact command string"}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
@@ -222,6 +223,20 @@ def dispatch_mcp_tool(name, args):
         tools=composio_tool_catalog()
         if not tools: raise RuntimeError("No Composio tools found. Configure the Codein Worker and connect a service first.")
         return {"ok":True,"count":len(tools),"tools":[{"name":t["name"],"description":t["description"][:180]} for t in tools]}
+    if name=="composio_service_link":
+        toolkit=str(args.get("toolkit","")).strip().lower()
+        if not toolkit: raise ValueError("Toolkit is required")
+        platform_config=composio_platform.read_config()
+        if not platform_config.get("worker_url") or not platform_config.get("token"):
+            raise RuntimeError("Composio Platform is not configured in Codein.")
+        res=composio_platform.link_service(toolkit, platform_config)
+        url=str(res.get("redirect_url") or res.get("url") or res.get("connection_url") or "")
+        if not url:
+            exec_res=composio_platform.call_tool("COMPOSIO_MANAGE_CONNECTIONS",{"toolkits":[toolkit],"reinitiate":True},platform_config)
+            url=str(exec_res.get("redirect_url") or exec_res.get("url") or "")
+        if not url: raise RuntimeError("Could not retrieve Composio connection URL for "+toolkit)
+        event("composio_service_link_generated",{"toolkit":toolkit})
+        return {"ok":True,"toolkit":toolkit,"redirect_url":url}
     if name.startswith("composio__"):
         platform_config=composio_platform.read_config()
         if platform_config.get("worker_url") and platform_config.get("token"):

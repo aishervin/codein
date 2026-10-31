@@ -171,7 +171,7 @@ export default {
       }
     }
 
-    if (!["/v1/session", "/v1/tools", "/v1/execute"].includes(url.pathname) || request.method !== "POST") {
+    if (!["/v1/session", "/v1/tools", "/v1/execute", "/v1/link"].includes(url.pathname) || request.method !== "POST") {
       return json({ error: "Not found" }, 404);
     }
 
@@ -184,6 +184,21 @@ export default {
         return json({ session_id: await ensureSession(env, userId, body.session_id) });
       }
       const sessionId = await ensureSession(env, userId, body.session_id);
+      if (url.pathname === "/v1/link") {
+        const toolkit = String(body.toolkit || "").trim().toLowerCase();
+        if (!toolkit) return json({ error: "Toolkit is required" }, 400);
+        let linkResult = null;
+        try {
+          linkResult = await composioRequest(env, "/tool_router/session/" + encodeURIComponent(sessionId) + "/link", "POST", { toolkit });
+        } catch {
+          linkResult = await composioRequest(env, "/tool_router/session/" + encodeURIComponent(sessionId) + "/execute", "POST", {
+            tool_slug: "COMPOSIO_MANAGE_CONNECTIONS",
+            arguments: { toolkits: [toolkit], reinitiate: true }
+          });
+        }
+        const redirectUrl = linkResult?.redirect_url || linkResult?.url || linkResult?.data?.redirect_url || linkResult?.data?.url || "";
+        return json({ ok: true, session_id: sessionId, redirect_url: redirectUrl });
+      }
       const result = url.pathname === "/v1/tools" ? await tools(env, sessionId) : await execute(env, sessionId, body);
       return json(result);
     } catch (error) {
