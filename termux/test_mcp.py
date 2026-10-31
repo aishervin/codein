@@ -459,6 +459,53 @@ class McpTransportTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertNotIn("token", result)
 
+    def test_composio_worker_requests_use_a_named_user_agent(self):
+        platform = mcp_server.composio_platform
+        with patch.object(platform, "urlopen", return_value=io.BytesIO(b'{"ok":true}')) as urlopen_mock:
+            result = platform.request("https://codein.workers.dev", "/v1/bootstrap")
+
+        self.assertEqual(result, {"ok":True})
+        request = urlopen_mock.call_args.args[0]
+        self.assertEqual(request.get_header("User-agent"), "Codein-Termux/1.0")
+
+    def test_composio_worker_only_treats_installation_401_as_authorization_failure(self):
+        platform = mcp_server.composio_platform
+        forbidden = HTTPError(
+            "https://codein.workers.dev/v1/bootstrap",
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO(b'{"error":"Forbidden"}'),
+        )
+        with patch.object(platform, "urlopen", side_effect=forbidden):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 403") as error:
+                platform.request("https://codein.workers.dev", "/v1/bootstrap")
+        self.assertNotIsInstance(error.exception, platform.WorkerAuthorizationError)
+
+        unauthorized = HTTPError(
+            "https://codein.workers.dev/v1/tools",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"error":"Unauthorized"}'),
+        )
+        with patch.object(platform, "urlopen", side_effect=unauthorized):
+            with self.assertRaises(platform.WorkerAuthorizationError) as error:
+                platform.request("https://codein.workers.dev", "/v1/tools", "stale-token")
+        self.assertEqual(error.exception.path, "/v1/tools")
+
+        session_mismatch = HTTPError(
+            "https://codein.workers.dev/v1/tools",
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO(b'{"error":"Session does not belong to this installation"}'),
+        )
+        with patch.object(platform, "urlopen", side_effect=session_mismatch):
+            with self.assertRaises(platform.WorkerAuthorizationError) as error:
+                platform.request("https://codein.workers.dev", "/v1/tools", "valid-token")
+        self.assertEqual(error.exception.status, 403)
+
     def test_composio_configuration_replaces_rejected_installation_identity(self):
         platform = mcp_server.composio_platform
         old_config = {
@@ -513,17 +560,101 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(save_mock.call_args.args[0]["token"], "valid-install-token")
         self.assertEqual(save_mock.call_args.args[0]["session_id"], "trs_recovered")
 
+    def test_composio_catalog_refreshes_worker_identity_after_authorization_failure(self):
+        platform = mcp_server.composio_platform
+        config = {
+            "worker_url":"https://codein.workers.dev",
+            "token":"stale-token",
+            "user_id":"codein_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "session_id":"trs_stale",
+        }
+        refreshed = {
+            **config,
+            "token":"fresh-token",
+            "session_id":"trs_fresh",
+        }
+        with patch.object(platform, "request", side_effect=[
+                platform.WorkerAuthorizationError(403), {"tools":[{"name":"COMPOSIO_MANAGE_CONNECTIONS"}]}
+        ]) as request_mock, \
+                patch.object(platform, "configure", return_value={"ok":True}) as configure_mock, \
+                patch.object(platform, "read_config", return_value=refreshed):
+            result = platform.tools(config)
+
+        self.assertEqual(result, [{"name":"COMPOSIO_MANAGE_CONNECTIONS"}])
+        configure_mock.assert_called_once_with("https://codein.workers.dev")
+        self.assertEqual(request_mock.call_args_list[0].args[1:], (
+            "/v1/tools", "stale-token", {"session_id":"trs_stale"}
+        ))
+        self.assertEqual(request_mock.call_args_list[1].args[1:], (
+            "/v1/tools", "fresh-token", {"session_id":"trs_fresh"}
+        ))
+
+    def test_composio_tool_call_refreshes_worker_identity_after_authorization_failure(self):
+        platform = mcp_server.composio_platform
+        config = {
+            "worker_url":"https://codein.workers.dev",
+            "token":"stale-token",
+            "user_id":"codein_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "session_id":"trs_stale",
+        }
+        refreshed = {
+            **config,
+            "token":"fresh-token",
+            "session_id":"trs_fresh",
+        }
+        with patch.object(platform, "request", side_effect=[
+                platform.WorkerAuthorizationError(401), {"data":{"redirect_url":"https://connect.example/link"}}
+        ]) as request_mock, \
+                patch.object(platform, "configure", return_value={"ok":True}) as configure_mock, \
+                patch.object(platform, "read_config", return_value=refreshed):
+            result = platform.call_tool("COMPOSIO_MANAGE_CONNECTIONS", {"toolkits":["gmail"]}, config)
+
+        self.assertEqual(result, {"redirect_url":"https://connect.example/link"})
+        configure_mock.assert_called_once_with("https://codein.workers.dev")
+        self.assertEqual(request_mock.call_args_list[0].args[1:], (
+            "/v1/execute", "stale-token", {
+                "session_id":"trs_stale",
+                "tool_slug":"COMPOSIO_MANAGE_CONNECTIONS",
+                "arguments":{"toolkits":["gmail"]},
+            }
+        ))
+        self.assertEqual(request_mock.call_args_list[1].args[1:], (
+            "/v1/execute", "fresh-token", {
+                "session_id":"trs_fresh",
+                "tool_slug":"COMPOSIO_MANAGE_CONNECTIONS",
+                "arguments":{"toolkits":["gmail"]},
+            }
+        ))
+
+    def test_composio_authorization_recovery_retries_only_once(self):
+        platform = mcp_server.composio_platform
+        config = {
+            "worker_url":"https://codein.workers.dev",
+            "token":"stale-token",
+            "session_id":"trs_stale",
+        }
+        with patch.object(platform, "request", side_effect=[
+                platform.WorkerAuthorizationError(401), platform.WorkerAuthorizationError(403)
+        ]) as request_mock, \
+                patch.object(platform, "configure", return_value={"ok":True}) as configure_mock, \
+                patch.object(platform, "read_config", return_value={**config, "token":"fresh-token"}):
+            with self.assertRaises(platform.WorkerAuthorizationError):
+                platform.call_tool("COMPOSIO_MANAGE_CONNECTIONS", {}, config)
+
+        self.assertEqual(request_mock.call_count, 2)
+        configure_mock.assert_called_once_with("https://codein.workers.dev")
+
     def test_composio_platform_identity_is_used_for_catalog_and_tool_calls(self):
         config={"worker_url":"https://codein.workers.dev","token":"local-install-token","user_id":"codein_0123456789abcdef0123456789abcdef"}
         with patch.object(mcp_server.composio_platform, "read_config", return_value=config), \
                 patch.object(mcp_server.composio_platform, "tools", return_value=[{"name":"COMPOSIO_MANAGE_CONNECTIONS","description":"Connect an account","inputSchema":{"type":"object","properties":{}}}]) as list_tools, \
                 patch.object(mcp_server.composio_platform, "call_tool", return_value={"redirect_url":"https://connect.example/link"}) as call_tool:
             catalog=mcp_server.composio_tool_catalog()
-            result=mcp_server.dispatch_mcp_tool("composio__COMPOSIO_MANAGE_CONNECTIONS", {"toolkit":"gmail"})
+            result=mcp_server.dispatch_mcp_tool("composio__COMPOSIO_MANAGE_CONNECTIONS", {"toolkits":["gmail"]})
         self.assertEqual(catalog[0]["name"],"composio__COMPOSIO_MANAGE_CONNECTIONS")
         self.assertEqual(result["redirect_url"],"https://connect.example/link")
         list_tools.assert_called_once_with(config)
-        call_tool.assert_called_once_with("COMPOSIO_MANAGE_CONNECTIONS",{"toolkit":"gmail"},config)
+        call_tool.assert_called_once_with("COMPOSIO_MANAGE_CONNECTIONS",{"toolkits":["gmail"]},config)
 
     def test_local_agent_room_tools(self):
         saved = self.call_tool("credential_save", {"name": "test_key", "value": "unit-secret"})

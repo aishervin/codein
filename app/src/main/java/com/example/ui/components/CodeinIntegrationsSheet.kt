@@ -1,6 +1,8 @@
 package com.example.ui.components
 
+import android.net.Uri
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,7 +44,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,6 +58,8 @@ import com.example.ui.theme.NeonOrangeSoft
 import com.example.ui.theme.TextMuted
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 private data class ComposioService(
     val toolkit: String,
@@ -85,13 +92,17 @@ fun CodeinIntegrationsSheet(
     agentBusy: Boolean,
     statuses: Map<String, String>,
     onStatusChange: (String, String) -> Unit,
-    onComposioAction: (String, String, Boolean) -> Unit
+    onOpenConnectionLink: (String, String, String) -> Unit,
+    onCheckComposioStatus: (String, String) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     var isPreparing by remember { mutableStateOf(false) }
     var platformReady by remember { mutableStateOf(false) }
     var setupStatus by remember { mutableStateOf("") }
     var toolCount by remember { mutableIntStateOf(0) }
+    var connectingToolkit by remember { mutableStateOf<String?>(null) }
+    var connectionLinks by remember { mutableStateOf(emptyMap<String, String>()) }
+    var connectionErrors by remember { mutableStateOf(emptyMap<String, String>()) }
     val scope = rememberCoroutineScope()
 
     suspend fun preparePlatform() {
@@ -126,6 +137,27 @@ fun CodeinIntegrationsSheet(
     }
 
     LaunchedEffect(bridgeReady, workerUrl) { preparePlatform() }
+
+    fun createConnectionLink(service: ComposioService) {
+        if (connectingToolkit != null) return
+        connectingToolkit = service.toolkit
+        connectionLinks = connectionLinks - service.toolkit
+        connectionErrors = connectionErrors - service.toolkit
+        scope.launch {
+            try {
+                val result = termuxClient.createComposioConnection(service.toolkit)
+                val link = findComposioAuthorizationLink(result)
+                    ?: error("Composio did not return a hosted sign-in link.")
+                connectionLinks = connectionLinks + (service.toolkit to link)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                connectionErrors = connectionErrors + (service.toolkit to (error.message ?: "Could not create the Composio sign-in link.").take(220))
+            } finally {
+                if (connectingToolkit == service.toolkit) connectingToolkit = null
+            }
+        }
+    }
 
     val normalizedQuery = query.trim().lowercase()
     val filteredServices = if (normalizedQuery.isBlank()) composioServices else {
@@ -166,7 +198,7 @@ fun CodeinIntegrationsSheet(
                 }
             }
             Text(
-                "Choose a service to create its official sign-in link. Account status changes to Active only after Composio confirms the connection.",
+                "Choose a service to create its sign-in link. After signing in in your browser, return here and tap Check status. Accounts are marked Active only after Composio confirms the connection.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
                 lineHeight = 17.sp
@@ -202,7 +234,7 @@ fun CodeinIntegrationsSheet(
                 placeholder = { Text("GitHub, Gmail, or another service") }
             )
             if (!agentReady) {
-                Text("Select a Termux-backed AI model and finish any active request to connect a service.", color = NeonOrangeSoft, fontSize = 11.sp)
+                Text("A Termux-backed AI model is needed to check an existing connection.", color = NeonOrangeSoft, fontSize = 11.sp)
             }
             if (shownServices.isEmpty()) {
                 Text("No matching services. Search by name to request another Composio service.", color = TextMuted, fontSize = 12.sp)
@@ -211,14 +243,20 @@ fun CodeinIntegrationsSheet(
                 IntegrationServiceCard(
                     service = service,
                     status = statuses[service.toolkit] ?: "unknown",
-                    enabled = platformReady && agentReady && !agentBusy && !isPreparing,
+                    connectEnabled = platformReady && bridgeReady && !agentBusy && !isPreparing && connectingToolkit == null,
+                    checkEnabled = platformReady && agentReady && !agentBusy && !isPreparing,
+                    isGeneratingLink = connectingToolkit == service.toolkit,
+                    connectionLink = connectionLinks[service.toolkit],
+                    connectionError = connectionErrors[service.toolkit],
                     onConnect = {
-                        onStatusChange(service.toolkit, "connecting")
-                        onComposioAction(service.toolkit, service.title, false)
+                        createConnectionLink(service)
                     },
                     onCheck = {
                         onStatusChange(service.toolkit, "checking")
-                        onComposioAction(service.toolkit, service.title, true)
+                        onCheckComposioStatus(service.toolkit, service.title)
+                    },
+                    onOpenConnectionLink = { link ->
+                        onOpenConnectionLink(service.toolkit, service.title, link)
                     }
                 )
             }
@@ -232,9 +270,14 @@ fun CodeinIntegrationsSheet(
 private fun IntegrationServiceCard(
     service: ComposioService,
     status: String,
-    enabled: Boolean,
+    connectEnabled: Boolean,
+    checkEnabled: Boolean,
+    isGeneratingLink: Boolean,
+    connectionLink: String?,
+    connectionError: String?,
     onConnect: () -> Unit,
-    onCheck: () -> Unit
+    onCheck: () -> Unit,
+    onOpenConnectionLink: (String) -> Unit
 ) {
     val (statusLabel, statusColor) = when (status) {
         "active" -> "Active" to Color(0xFF4DDB8A)
@@ -268,9 +311,65 @@ private fun IntegrationServiceCard(
                 Text(statusLabel, color = statusColor, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onConnect, enabled = enabled, modifier = Modifier.weight(1f)) { Text("Connect") }
-                OutlinedButton(onClick = onCheck, enabled = enabled, modifier = Modifier.weight(1f)) { Text("Check status") }
+                Button(onClick = onConnect, enabled = connectEnabled, modifier = Modifier.weight(1f)) {
+                    if (isGeneratingLink) CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp)
+                    else Text(if (connectionLink == null) "Connect" else "Create new link")
+                }
+                OutlinedButton(onClick = onCheck, enabled = checkEnabled, modifier = Modifier.weight(1f)) { Text("Check status") }
+            }
+            connectionLink?.let { link ->
+                Text("Composio sign-in link · opens in your browser", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+                Text(
+                    text = link,
+                    modifier = Modifier.fillMaxWidth().clickable { onOpenConnectionLink(link) }.padding(vertical = 2.dp),
+                    style = TextStyle(
+                        color = NeonOrange,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        textAlign = TextAlign.Start,
+                        textDirection = TextDirection.Ltr
+                    ),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            connectionError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 11.sp, lineHeight = 15.sp) }
+        }
+    }
+}
+
+private fun findComposioAuthorizationLink(value: JSONObject, depth: Int = 0): String? {
+    if (depth > 5) return null
+    val linkKeys = listOf(
+        "redirect_url", "redirectUrl", "authorization_url", "authorization_link", "auth_url",
+        "connect_url", "connect_link", "connection_url", "connection_link", "link_url", "url", "link"
+    )
+    for (key in linkKeys) {
+        val candidate = value.optString(key).trim()
+        if (isComposioHostedLink(candidate)) return candidate
+        value.optJSONObject(key)?.let { nested ->
+            findComposioAuthorizationLink(nested, depth + 1)?.let { return it }
+        }
+    }
+    val keys = value.keys()
+    while (keys.hasNext()) {
+        when (val nested = value.opt(keys.next())) {
+            is JSONObject -> findComposioAuthorizationLink(nested, depth + 1)?.let { return it }
+            is JSONArray -> for (index in 0 until nested.length()) {
+                nested.optJSONObject(index)?.let { item ->
+                    findComposioAuthorizationLink(item, depth + 1)?.let { return it }
+                }
             }
         }
     }
+    return null
+}
+
+private fun isComposioHostedLink(value: String): Boolean {
+    if (!value.startsWith("https://", ignoreCase = true)) return false
+    val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return false
+    val host = uri.host?.lowercase().orEmpty()
+    return uri.scheme.equals("https", ignoreCase = true) &&
+        (host == "composio.dev" || host.endsWith(".composio.dev")) &&
+        uri.userInfo == null
 }

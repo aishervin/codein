@@ -416,10 +416,14 @@ class TermuxBridgeClient(context: Context) {
     suspend fun refreshComposioTools(): JSONObject =
         mcpTool("composio_tools_refresh", JSONObject(), 90)
 
-    /** Generate a Composio connection redirect URL for a service/toolkit. */
-    suspend fun linkComposioService(toolkit: String): String {
-        val result = mcpTool("composio_service_link", JSONObject().put("toolkit", toolkit), 45)
-        return result.optString("redirect_url").ifBlank { result.optString("url") }
+    /** Create a hosted sign-in link without routing the request through the chat model. */
+    suspend fun createComposioConnection(toolkit: String): JSONObject {
+        require(toolkit.matches(Regex("[a-z0-9_]{1,60}"))) { "Invalid Composio service identifier" }
+        return mcpTool(
+            "composio__COMPOSIO_MANAGE_CONNECTIONS",
+            JSONObject().put("toolkits", JSONArray().put(toolkit)),
+            90
+        )
     }
 
     private suspend fun mcpTool(name: String, arguments: JSONObject, timeoutSeconds: Int = 45): JSONObject {

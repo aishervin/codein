@@ -148,6 +148,19 @@ function responseStatus(error) {
   return 502;
 }
 
+function responseMessage(error, status) {
+  if (status === 413) return "Request body too large";
+  if (status === 400) return "Invalid tool request";
+  if (status === 403) return "Session does not belong to this installation";
+  if (error.message === "Composio project key is not configured") {
+    return "Worker setup is incomplete: the COMPOSIO_API_KEY secret is missing.";
+  }
+  if (error.status === 401 || error.status === 403) {
+    return "Composio rejected the Worker project key. Check that it is a Platform project key with Session management read/write and Session tool execution write permissions.";
+  }
+  return "Composio request failed";
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -171,7 +184,7 @@ export default {
       }
     }
 
-    if (!["/v1/session", "/v1/tools", "/v1/execute", "/v1/link"].includes(url.pathname) || request.method !== "POST") {
+    if (!["/v1/session", "/v1/tools", "/v1/execute"].includes(url.pathname) || request.method !== "POST") {
       return json({ error: "Not found" }, 404);
     }
 
@@ -184,29 +197,11 @@ export default {
         return json({ session_id: await ensureSession(env, userId, body.session_id) });
       }
       const sessionId = await ensureSession(env, userId, body.session_id);
-      if (url.pathname === "/v1/link") {
-        const toolkit = String(body.toolkit || "").trim().toLowerCase();
-        if (!toolkit) return json({ error: "Toolkit is required" }, 400);
-        let linkResult = null;
-        try {
-          linkResult = await composioRequest(env, "/tool_router/session/" + encodeURIComponent(sessionId) + "/link", "POST", { toolkit });
-        } catch {
-          linkResult = await composioRequest(env, "/tool_router/session/" + encodeURIComponent(sessionId) + "/execute", "POST", {
-            tool_slug: "COMPOSIO_MANAGE_CONNECTIONS",
-            arguments: { toolkits: [toolkit], reinitiate: true }
-          });
-        }
-        const redirectUrl = linkResult?.redirect_url || linkResult?.url || linkResult?.data?.redirect_url || linkResult?.data?.url || "";
-        return json({ ok: true, session_id: sessionId, redirect_url: redirectUrl });
-      }
       const result = url.pathname === "/v1/tools" ? await tools(env, sessionId) : await execute(env, sessionId, body);
       return json(result);
     } catch (error) {
       const status = responseStatus(error);
-      return json({ error: status === 413 ? "Request body too large" :
-        status === 400 ? "Invalid tool request" :
-        status === 403 ? "Session does not belong to this installation" :
-        "Composio request failed" }, status);
+      return json({ error: responseMessage(error, status) }, status);
     }
   },
 };

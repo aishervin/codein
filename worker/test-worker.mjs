@@ -88,6 +88,33 @@ test("Composio project key is only used by Worker upstream calls", async () => {
   assert.ok(calls.some((call) => call.url.endsWith("/tools")));
 });
 
+test("missing Composio project key returns a setup hint", async () => {
+  const env = envWithFetch(() => { throw new Error("unexpected fetch"); });
+  env.COMPOSIO_API_KEY = undefined;
+  const identity = await bootstrap(env);
+  const response = await worker.fetch(new Request("https://worker.test/v1/session", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + identity.token, "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: null }),
+  }), env);
+
+  assert.equal(response.status, 502);
+  assert.equal((await response.json()).error, "Worker setup is incomplete: the COMPOSIO_API_KEY secret is missing.");
+});
+
+test("rejected Composio project key explains the required scopes", async () => {
+  const env = envWithFetch(() => new Response("{}", { status: 403 }));
+  const identity = await bootstrap(env);
+  const response = await worker.fetch(new Request("https://worker.test/v1/session", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + identity.token, "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: null }),
+  }), env);
+
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /Session management read\/write and Session tool execution write permissions/);
+});
+
 test("a session owned by a different installation is rejected", async () => {
   const env = envWithFetch(async (input) => {
     const url = new URL(input);

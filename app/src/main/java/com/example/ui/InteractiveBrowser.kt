@@ -157,6 +157,7 @@ internal class CodeinBrowserController {
         webView?.let { return it }
         return WebView(context).also { view ->
             webView = view
+            view.setBackgroundColor(android.graphics.Color.WHITE)
             view.settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -170,6 +171,7 @@ internal class CodeinBrowserController {
                 setSupportMultipleWindows(false)
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) safeBrowsingEnabled = true
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) forceDark = WebSettings.FORCE_DARK_OFF
             }
             CookieManager.getInstance().setAcceptCookie(true)
             view.webViewClient = object : WebViewClient() {
@@ -348,6 +350,7 @@ internal fun CodeinBrowserToolbar(
     onForward: () -> Unit,
     onReload: () -> Unit,
     onNavigate: (String) -> Unit,
+    onOpenExternal: (String) -> Unit,
     onClose: () -> Unit,
     canClose: Boolean = true
 ) {
@@ -375,6 +378,11 @@ internal fun CodeinBrowserToolbar(
                         ) {
                             Icon(Icons.Default.Chat, contentDescription = null, tint = CodeinBrowserBlue, modifier = Modifier.size(17.dp))
                             Text("Chat", color = CodeinBrowserBlue, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    if (page.url.isNotBlank()) {
+                        TextButton(onClick = { onOpenExternal(page.url) }) {
+                            Text("External", color = CodeinBrowserBlue, fontSize = 11.sp)
                         }
                     }
                     IconButton(onClick = onClose, enabled = canClose, modifier = Modifier.size(34.dp)) {

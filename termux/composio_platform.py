@@ -10,9 +10,10 @@ CONFIG_PATH = Path.home() / ".codein" / "keys" / "composio_platform.json"
 
 
 class WorkerAuthorizationError(RuntimeError):
-    def __init__(self, status):
+    def __init__(self, status, path=""):
         self.status = status
-        super().__init__("Composio Worker authorization failed. Reconnect the service in Codein.")
+        self.path = path
+        super().__init__("Composio Worker authorization failed for " + (path or "this installation") + " (HTTP " + str(status) + ").")
 
 
 def worker_url(value):
@@ -25,7 +26,11 @@ def worker_url(value):
 
 
 def request(base_url, path, token=None, payload=None, timeout=30):
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Codein-Termux/1.0",
+    }
     if token:
         headers["Authorization"] = "Bearer " + token
     body = json.dumps(payload or {}).encode("utf-8")
@@ -35,7 +40,15 @@ def request(base_url, path, token=None, payload=None, timeout=30):
             raw = response.read(2_000_000).decode("utf-8", "replace")
     except HTTPError as exc:
         if exc.code in (401, 403):
-            raise WorkerAuthorizationError(exc.code) from None
+            try:
+                error_body = json.loads(exc.read(2000).decode("utf-8", "replace"))
+            except (ValueError, OSError):
+                error_body = {}
+            if token and (exc.code == 401 or error_body.get("error") == "Session does not belong to this installation"):
+                raise WorkerAuthorizationError(exc.code, path) from None
+            if exc.code == 401:
+                raise RuntimeError("Composio Worker denied identity creation (HTTP 401). Check its Cloudflare access rules.") from None
+            raise RuntimeError("Composio Worker denied this request (HTTP " + str(exc.code) + "). Check its Cloudflare access rules.") from None
         if exc.code == 429:
             raise RuntimeError("Composio Worker is rate-limiting requests. Try again shortly.") from None
         raise RuntimeError("Composio Worker request failed (HTTP " + str(exc.code) + ").") from None
@@ -76,12 +89,12 @@ def configure(url):
                 try:
                     session = request(base_url, "/v1/session", token, {"session_id": None}, timeout=45)
                 except WorkerAuthorizationError as retry_error:
-                    if retry_error.status != 401:
+                    if retry_error.status not in (401, 403):
                         raise
                     token, user_id = new_identity()
                     reused = False
                     session = request(base_url, "/v1/session", token, {"session_id": None}, timeout=45)
-            elif error.status == 401:
+            elif error.status in (401, 403):
                 token, user_id = new_identity()
                 reused = False
                 session = request(base_url, "/v1/session", token, {"session_id": None}, timeout=45)
@@ -115,11 +128,36 @@ def save_config(config):
     CONFIG_PATH.chmod(0o600)
 
 
+def authorized_request(config, path, payload_for_config, timeout):
+    def send(active_config):
+        return request(
+            active_config["worker_url"],
+            path,
+            active_config["token"],
+            payload_for_config(active_config),
+            timeout=timeout,
+        )
+
+    try:
+        return send(config), config
+    except WorkerAuthorizationError:
+        configure(config["worker_url"])
+        refreshed_config = read_config()
+        if not refreshed_config.get("worker_url") or not refreshed_config.get("token"):
+            raise RuntimeError("Composio Worker identity could not be refreshed.") from None
+        return send(refreshed_config), refreshed_config
+
+
 def tools(config=None):
     config = config or read_config()
     if not config.get("worker_url") or not config.get("token"):
         return []
-    result = request(config["worker_url"], "/v1/tools", config["token"], {"session_id": config.get("session_id")}, timeout=90)
+    result, config = authorized_request(
+        config,
+        "/v1/tools",
+        lambda active: {"session_id": active.get("session_id")},
+        timeout=90,
+    )
     session_id = str(result.pop("session_id", ""))
     if session_id and session_id != config.get("session_id"):
         config["session_id"] = session_id
@@ -131,11 +169,16 @@ def call_tool(name, arguments, config=None):
     config = config or read_config()
     if not config.get("worker_url") or not config.get("token"):
         raise RuntimeError("Composio Platform is not configured in Codein.")
-    result = request(config["worker_url"], "/v1/execute", config["token"], {
-        "session_id": config.get("session_id"),
-        "tool_slug": name,
-        "arguments": arguments or {},
-    }, timeout=120)
+    result, config = authorized_request(
+        config,
+        "/v1/execute",
+        lambda active: {
+            "session_id": active.get("session_id"),
+            "tool_slug": name,
+            "arguments": arguments or {},
+        },
+        timeout=120,
+    )
     session_id = str(result.pop("session_id", ""))
     if session_id and session_id != config.get("session_id"):
         config["session_id"] = session_id
@@ -143,19 +186,3 @@ def call_tool(name, arguments, config=None):
     if result.get("result_type") == "failed":
         return {"error": str(result.get("error") or "Composio tool failed")[:1000]}
     return result.get("data", result)
-
-
-def link_service(toolkit, config=None):
-    config = config or read_config()
-    if not config.get("worker_url") or not config.get("token"):
-        raise RuntimeError("Composio Platform is not configured in Codein.")
-    result = request(config["worker_url"], "/v1/link", config["token"], {
-        "session_id": config.get("session_id"),
-        "toolkit": toolkit,
-    }, timeout=60)
-    session_id = str(result.pop("session_id", ""))
-    if session_id and session_id != config.get("session_id"):
-        config["session_id"] = session_id
-        save_config(config)
-    return result
-
