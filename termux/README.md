@@ -19,6 +19,10 @@ Copy the private token printed by the installer into Codein's Termux connection 
 
 Logs: `~/.codein/logs/server.log`
 
+## In-app Codein Browser
+
+Interactive browsing is mediated by the Android app and is not an MCP server tool. When the app supplies the browser request protocol, the assistant can navigate and inspect the visible in-app WebView. Clicks, field entry, and navigation to local/private-network addresses are paused for explicit user approval; saved credentials are referenced by name and may only be entered into a password field after approval. The Termux bridge cannot inspect or control pages in the user's external Android browser. Page content is untrusted, and authentication, CAPTCHA, access-control, and other site protections must not be bypassed.
+
 ## MCP protocol
 
 The server supports MCP JSON-RPC `2025-03-26` over Streamable HTTP at the single `/mcp` endpoint:

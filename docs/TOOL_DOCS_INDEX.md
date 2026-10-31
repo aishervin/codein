@@ -59,6 +59,8 @@ This is the source-of-truth URL catalog for every model connected to Codein. URL
 - OAuth 2.0: https://developers.google.com/identity/protocols/oauth2
 - Android Developers: https://developer.android.com/
 - Android API reference: https://developer.android.com/reference
+- Android WebView guide: https://developer.android.com/develop/ui/views/layout/webapps/webview
+- Android WebView JavaScript and cross-app scripting risks: https://developer.android.com/privacy-and-security/risks/cross-app-scripting
 - Kotlin docs: https://kotlinlang.org/docs/home.html
 - Jetpack Compose: https://developer.android.com/compose
 - Android Gradle Plugin: https://developer.android.com/build
