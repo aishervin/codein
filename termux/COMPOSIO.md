@@ -8,7 +8,7 @@ The public Codein app uses Composio Platform sessions. Each Termux installation 
 2. Configure the Android build with the resulting Worker URL through the GitHub Actions variable `COMPOSIO_WORKER_URL`.
 3. Re-run the Codein Termux installer to install the Platform client helper.
 4. Connect Termux in Codein, open the Composio tab, and choose **Set up securely**. The helper requests a signed per-install identity and stores it locally in `~/.codein/keys/composio_platform.json` with file permissions `0600`.
-5. Choose a service and select **Connect**. Codein requests a hosted authorization link directly through the Composio tool and displays it beneath that service's buttons. The link opens in the Android system browser for OAuth compatibility. After approving access, return to Codein and tap **Check status**.
+5. Choose a service and select **Create link**. Codein asks the selected Termux-backed model to call `COMPOSIO_MANAGE_CONNECTIONS`. A valid hosted link appears in the chat as a **Continue to [service]** button; the raw temporary URL is never shown or saved in chat history. After approving access in the browser, return to Codein and tap **Check status**.
 
 No additional Termux package is needed for Composio; the helper uses Python's standard library. Codein Browser uses Android System WebView and can open a page externally if a site does not render correctly in its embedded view.
 

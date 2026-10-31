@@ -6,6 +6,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import java.net.URI
 
 private data class ChatLink(
     val start: Int,
@@ -16,6 +17,20 @@ private data class ChatLink(
 
 private val markdownLinkPattern = Regex("""\[([^\]]+)]\((https?://[^)\s]+)\)""")
 private val plainUrlPattern = Regex("""https?://[^\s<>]+""")
+private val composioUrlPattern = Regex("""https://[^\s<>"']+""", RegexOption.IGNORE_CASE)
+
+internal fun findComposioAuthorizationLink(text: String): String? =
+    composioUrlPattern.findAll(text)
+        .map { it.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}') }
+        .firstOrNull(::isComposioHostedLink)
+
+private fun isComposioHostedLink(value: String): Boolean {
+    val uri = runCatching { URI(value) }.getOrNull() ?: return false
+    val host = uri.host?.lowercase() ?: return false
+    return uri.scheme.equals("https", ignoreCase = true) &&
+        (host == "composio.dev" || host.endsWith(".composio.dev")) &&
+        uri.userInfo == null
+}
 
 internal fun linkifyChatText(text: String, linkColor: Color): AnnotatedString {
     val markdownLinks = markdownLinkPattern.findAll(text).map { match ->

@@ -1,6 +1,7 @@
 package com.example
 
 import androidx.compose.ui.graphics.Color
+import com.example.ui.findComposioAuthorizationLink
 import com.example.ui.linkifyChatText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -32,5 +33,15 @@ class ChatLinksTest {
         val annotated = linkifyChatText("mailto:help@example.com", Color.Red)
 
         assertTrue(annotated.getStringAnnotations("URL", 0, annotated.length).isEmpty())
+    }
+
+    @Test
+    fun extractsOnlyHttpsComposioAuthorizationLinks() {
+        assertEquals(
+            "https://connect.composio.dev/a/connect?token=abc",
+            findComposioAuthorizationLink("Open https://connect.composio.dev/a/connect?token=abc.")
+        )
+        assertTrue(findComposioAuthorizationLink("https://example.com/?next=composio.dev") == null)
+        assertTrue(findComposioAuthorizationLink("http://connect.composio.dev/a/connect") == null)
     }
 }
