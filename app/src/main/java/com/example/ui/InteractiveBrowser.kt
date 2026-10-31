@@ -169,7 +169,7 @@ internal class CodeinBrowserController {
                 allowUniversalAccessFromFileURLs = false
                 javaScriptCanOpenWindowsAutomatically = false
                 setSupportMultipleWindows(false)
-                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) safeBrowsingEnabled = true
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) forceDark = WebSettings.FORCE_DARK_OFF
             }
@@ -192,6 +192,7 @@ internal class CodeinBrowserController {
                     request: WebResourceRequest?,
                     error: WebResourceError?
                 ) {
+                    android.util.Log.e("CodeinBrowser", "Error loading ${request?.url}: ${error?.description}")
                     if (request?.isForMainFrame == true) {
                         val message = "Page failed to load (code ${error?.errorCode ?: "unknown"})."
                         navigationWaiter?.completeExceptionally(IllegalStateException(message))
