@@ -167,7 +167,7 @@ fun CodeinIntegrationsSheet(
                 }
             }
             Text(
-                "Choose a service and ask your selected model to create a Composio sign-in link. It appears in the chat as a button. After signing in, return here and tap Check status.",
+                "Choose a service to ask the active AI model for a Composio sign-in link. The link appears as a button in chat and opens in your external browser.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
                 lineHeight = 17.sp
@@ -202,8 +202,12 @@ fun CodeinIntegrationsSheet(
                 label = { Text("Search services") },
                 placeholder = { Text("GitHub, Gmail, or another service") }
             )
-            if (!agentReady) {
-                Text("A Termux-backed AI model is needed to create links and check existing connections.", color = NeonOrangeSoft, fontSize = 11.sp)
+            if (!bridgeReady) {
+                Text("Connect the Termux bridge before using Composio tools.", color = NeonOrangeSoft, fontSize = 11.sp)
+            } else if (agentBusy) {
+                Text("Finish the current chat action before requesting another integration.", color = NeonOrangeSoft, fontSize = 11.sp)
+            } else if (!agentReady) {
+                Text("Select an active Termux-backed AI model to create links and check connections.", color = NeonOrangeSoft, fontSize = 11.sp)
             }
             if (shownServices.isEmpty()) {
                 Text("No matching services. Search by name to request another Composio service.", color = TextMuted, fontSize = 12.sp)
@@ -269,7 +273,7 @@ private fun IntegrationServiceCard(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(onClick = onConnect, enabled = connectEnabled, modifier = Modifier.weight(1f)) {
-                    Text("Create link")
+                    Text("Create link in chat")
                 }
                 OutlinedButton(onClick = onCheck, enabled = checkEnabled, modifier = Modifier.weight(1f)) { Text("Check status") }
             }

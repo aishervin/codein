@@ -94,6 +94,11 @@ internal data class BrowserActionRequest(
         (action == "navigate" && requiresNavigationApproval(Uri.parse(normalizeBrowserUrl(url).orEmpty()).host.orEmpty()))
 }
 
+internal data class BrowserActionParseResult(
+    val request: BrowserActionRequest? = null,
+    val error: String? = null
+)
+
 private fun requiresNavigationApproval(rawHost: String): Boolean {
     val host = rawHost.lowercase(Locale.ROOT).trim('[', ']')
     if (host.isBlank() || host == "localhost" || host.endsWith(".localhost") ||
@@ -105,31 +110,114 @@ private fun requiresNavigationApproval(rawHost: String): Boolean {
 internal fun hasBrowserActionMarker(text: String): Boolean =
     text.contains(BROWSER_ACTION_START) || text.contains(BROWSER_ACTION_END)
 
-internal fun parseBrowserActionRequest(text: String): BrowserActionRequest? {
-    if (Regex(Regex.escape(BROWSER_ACTION_START)).findAll(text).count() != 1 ||
-        Regex(Regex.escape(BROWSER_ACTION_END)).findAll(text).count() != 1) return null
-    val match = Regex(Regex.escape(BROWSER_ACTION_START) + "([\\s\\S]*?)" + Regex.escape(BROWSER_ACTION_END))
-        .find(text) ?: return null
-    if (text.substring(0, match.range.first).isNotBlank() || text.substring(match.range.last + 1).isNotBlank()) return null
-    val payload = runCatching { JSONObject(match.groupValues[1].trim()) }.getOrNull() ?: return null
-    if (payload.optString("protocol") != "codein.browser.v1") return null
+internal fun parseBrowserActionRequest(text: String): BrowserActionParseResult {
+    val markerStart = text.indexOf(BROWSER_ACTION_START)
+    if (markerStart < 0) return BrowserActionParseResult(error = "The browser request start marker is missing.")
+    if (text.substring(0, markerStart).isNotBlank()) {
+        return BrowserActionParseResult(error = "Unexpected text outside the browser request markers.")
+    }
 
-    val action = payload.optString("action").trim().lowercase(Locale.ROOT)
-    if (action !in setOf("navigate", "inspect", "click", "fill", "fill_saved_credential")) return null
-    val reason = payload.optString("reason").trim().take(500)
-    val url = payload.optString("url").trim()
-    val selector = payload.optString("selector").trim()
-    val value = payload.optString("value")
-    val credentialName = payload.optString("credential_name").trim()
+    var jsonStart = markerStart + BROWSER_ACTION_START.length
+    while (jsonStart < text.length && text[jsonStart].isWhitespace()) jsonStart++
+    if (jsonStart >= text.length || text[jsonStart] != '{') {
+        return BrowserActionParseResult(error = "The browser request payload must be a JSON object.")
+    }
+    var depth = 0
+    var inString = false
+    var escaped = false
+    var jsonEnd = -1
+    for (index in jsonStart until text.length) {
+        val char = text[index]
+        if (inString) {
+            when {
+                escaped -> escaped = false
+                char == '\\' -> escaped = true
+                char == '"' -> inString = false
+            }
+        } else {
+            when (char) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) {
+                        jsonEnd = index
+                        break
+                    }
+                }
+            }
+        }
+    }
+    if (jsonEnd < 0) return BrowserActionParseResult(error = "The browser request payload is not valid JSON.")
+    val payload = runCatching { JSONObject(text.substring(jsonStart, jsonEnd + 1)) }.getOrNull()
+        ?: return BrowserActionParseResult(error = "The browser request payload is not valid JSON.")
+    var markerEnd = jsonEnd + 1
+    while (markerEnd < text.length && text[markerEnd].isWhitespace()) markerEnd++
+    if (!text.startsWith(BROWSER_ACTION_END, markerEnd)) {
+        return BrowserActionParseResult(error = "The browser request end marker is missing or misplaced.")
+    }
+    val trailingText = text.substring(markerEnd + BROWSER_ACTION_END.length)
+    if (trailingText.isNotBlank()) {
+        return BrowserActionParseResult(
+            error = if (trailingText.contains(BROWSER_ACTION_START) || trailingText.contains(BROWSER_ACTION_END)) {
+                "Expected exactly one browser request marker pair."
+            } else {
+                "Unexpected text outside the browser request markers."
+            }
+        )
+    }
+    if (payload.opt("protocol") !is String || payload.optString("protocol") != "codein.browser.v1") {
+        return BrowserActionParseResult(error = "The browser request protocol must be codein.browser.v1.")
+    }
 
-    if (reason.isBlank()) return null
-    if (action == "navigate" && (url.isBlank() || url.length > 2048 || normalizeBrowserUrl(url) == null)) return null
-    if (selector.length > 500 || '\u0000' in selector) return null
-    if (action in setOf("click", "fill", "fill_saved_credential") && selector.isBlank()) return null
-    if (action == "fill" && (value.length > 2000 || '\u0000' in value)) return null
-    if (action == "fill_saved_credential" && !credentialName.matches(Regex("[A-Za-z0-9._-]{1,100}"))) return null
+    fun stringField(name: String): String? {
+        if (!payload.has(name) || payload.isNull(name)) return ""
+        return payload.opt(name) as? String
+    }
 
-    return BrowserActionRequest(action, reason, url, selector, value, credentialName)
+    val actionValue = stringField("action")
+        ?: return BrowserActionParseResult(error = "The browser action must be a string.")
+    val reasonValue = stringField("reason")
+        ?: return BrowserActionParseResult(error = "The browser reason must be a string.")
+    val urlValue = stringField("url")
+        ?: return BrowserActionParseResult(error = "The browser URL must be a string.")
+    val selectorValue = stringField("selector")
+        ?: return BrowserActionParseResult(error = "The browser selector must be a string.")
+    val valueValue = stringField("value")
+        ?: return BrowserActionParseResult(error = "The fill value must be a string.")
+    val credentialValue = stringField("credential_name")
+        ?: return BrowserActionParseResult(error = "The credential name must be a string.")
+
+    val action = actionValue.trim().lowercase(Locale.ROOT)
+    if (action !in setOf("navigate", "inspect", "click", "fill", "fill_saved_credential")) {
+        return BrowserActionParseResult(error = "Unsupported browser action: $action.")
+    }
+    val reason = reasonValue.trim().take(500)
+    val url = urlValue.trim()
+    val selector = selectorValue.trim()
+    val value = valueValue
+    val credentialName = credentialValue.trim()
+
+    if (reason.isBlank()) return BrowserActionParseResult(error = "A non-empty reason is required.")
+    if (action == "navigate" && (url.isBlank() || url.length > 2048 || normalizeBrowserUrl(url) == null)) {
+        return BrowserActionParseResult(error = "The navigation URL must be a valid HTTP or HTTPS address.")
+    }
+    if (selector.length > 500 || '\u0000' in selector) {
+        return BrowserActionParseResult(error = "The browser selector is invalid or too long.")
+    }
+    if (action in setOf("click", "fill_saved_credential") && selector.isBlank()) {
+        return BrowserActionParseResult(error = "A CSS selector is required for $action.")
+    }
+    if (action == "fill" && (value.length > 2000 || '\u0000' in value)) {
+        return BrowserActionParseResult(error = "The fill value is invalid or too long.")
+    }
+    if (action == "fill_saved_credential" && !credentialName.matches(Regex("[A-Za-z0-9._-]{1,100}"))) {
+        return BrowserActionParseResult(error = "A valid credential_name is required for saved-credential entry.")
+    }
+
+    return BrowserActionParseResult(
+        request = BrowserActionRequest(action, reason, url, selector, value, credentialName)
+    )
 }
 
 internal fun normalizeBrowserUrl(raw: String): String? {
@@ -169,8 +257,8 @@ internal class CodeinBrowserController {
                 displayZoomControls = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 userAgentString = WebSettings.getDefaultUserAgent(context)
-                    .replace("; wv", "") 
-                    .replace("Version/4.0 ", "") // Act more like Chrome Desktop/Mobile
+                    .replace("; wv", "")
+                    .replace("Version/4.0 ", "")
                 allowFileAccess = false
                 allowContentAccess = true
                 allowFileAccessFromFileURLs = false
@@ -200,9 +288,13 @@ internal class CodeinBrowserController {
                     request: WebResourceRequest?,
                     error: WebResourceError?
                 ) {
-                    android.util.Log.e("CodeinBrowser", "Error loading ${request?.url}: ${error?.description}")
                     if (request?.isForMainFrame == true) {
-                        val message = "Page failed to load (code ${error?.errorCode ?: "unknown"})."
+                        val description = error?.description?.toString()?.takeIf(String::isNotBlank)
+                        val message = buildString {
+                            append("Page failed to load (code ${error?.errorCode ?: "unknown"})")
+                            if (description != null) append(": ").append(description)
+                            append('.')
+                        }
                         navigationWaiter?.completeExceptionally(IllegalStateException(message))
                         navigationWaiter = null
                         view?.let { publish(it, loading = false, error = message) }
@@ -211,7 +303,8 @@ internal class CodeinBrowserController {
 
                 override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                     handler?.cancel()
-                    val message = "Secure connection failed; navigation was blocked."
+                    val code = error?.primaryError?.let { " (SSL error $it)" }.orEmpty()
+                    val message = "Secure connection failed$code; navigation was blocked."
                     navigationWaiter?.completeExceptionally(IllegalStateException(message))
                     navigationWaiter = null
                     view?.let { publish(it, loading = false, error = message) }
@@ -251,11 +344,11 @@ internal class CodeinBrowserController {
             "navigate" -> navigateAndWait(view, request.url)
             "inspect" -> evaluate(view, inspectScript(request.selector))
             "click" -> evaluate(view, clickScript(request.selector))
-            "fill" -> evaluate(view, fillScript(request.selector, request.value, secret = false))
+            "fill" -> evaluate(view, browserFillScript(request.selector, request.value, secret = false))
             "fill_saved_credential" -> {
                 val secret = savedCredential?.takeIf(String::isNotEmpty)
                     ?: error("The saved credential is unavailable; no value was entered.")
-                evaluate(view, fillScript(request.selector, secret, secret = true))
+                evaluate(view, browserFillScript(request.selector, secret, secret = true))
                     .put("credential_name", request.credentialName)
                     .put("value_returned", false)
             }
@@ -286,7 +379,7 @@ internal class CodeinBrowserController {
             .put("title", state.title)
     }
 
-    private suspend fun evaluate(view: WebView, script: String): JSONObject =
+    private suspend fun evaluate(view: WebView, script: String): JSONObject = withTimeout(15_000) {
         withContext(Dispatchers.Main.immediate) {
             suspendCancellableCoroutine { continuation ->
                 view.evaluateJavascript(script) { value ->
@@ -295,10 +388,15 @@ internal class CodeinBrowserController {
                         JSONObject().put("ok", false).put("error", "The page returned an invalid result.")
                     }
                     if (result.optBoolean("ok")) continuation.resume(result)
-                    else continuation.resumeWith(Result.failure(IllegalStateException(result.optString("error"))))
+                    else {
+                        val message = result.optString("error").takeIf(String::isNotBlank)
+                            ?: "The page did not provide an error message."
+                        continuation.resumeWith(Result.failure(IllegalStateException(message)))
+                    }
                 }
             }
         }
+    }
 
     private fun publish(view: WebView, loading: Boolean, error: String = "") {
         val state = BrowserPageState(
@@ -324,123 +422,70 @@ internal class CodeinBrowserController {
     }
 
     private fun inspectScript(selector: String): String {
-        val quotedSelector = JSONObject.quote(selector)
-        return """
-        (function() {
-            try {
-                const MAX_TEXT_LENGTH = 8000;
-                const interactiveTags = ['a', 'button', 'input', 'select', 'textarea', 'label'];
-                
-                function isVisible(el) {
-                    const style = window.getComputedStyle(el);
-                    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && el.getClientRects().length > 0;
-                }
-
-                function getElementInfo(el, id) {
-                    el.setAttribute('data-codein-id', id);
-                    return {
-                        id: id,
-                        tag: el.tagName.toLowerCase(),
-                        text: (el.innerText || el.value || "").trim().slice(0, 200),
-                        role: el.getAttribute('role') || "",
-                        placeholder: el.getAttribute('placeholder') || "",
-                        ariaLabel: el.getAttribute('aria-label') || "",
-                        type: el.getAttribute('type') || ""
-                    };
-                }
-
-                const elements = [];
-                let idCounter = 0;
-                const all = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [role="link"], [onclick]');
-                
-                all.forEach(el => {
-                    if (isVisible(el)) {
-                        elements.push(getElementInfo(el, 'el_' + (++idCounter)));
-                    }
-                });
-
-                let target = null;
-                if ($quotedSelector && $quotedSelector !== "null") {
-                    const el = document.querySelector($quotedSelector);
-                    if (el) target = getElementInfo(el, 'target');
-                }
-
-                return {
-                    ok: true,
-                    site: location.hostname,
-                    title: document.title,
-                    url: location.href,
-                    interactive_elements: elements.slice(0, 100),
-                    page_text: (document.body?.innerText || "").slice(0, MAX_TEXT_LENGTH),
-                    target_element: target
-                };
-            } catch (x) {
-                return { ok: false, error: String(x) };
+        val lookup = selector.takeIf(String::isNotBlank)
+            ?.let(::browserElementExpression)
+            ?: "null"
+        val missingElement = if (selector.isBlank()) "" else "if(!e)return {ok:false,error:'Element not found'};"
+        return """(function(){try{
+            let idCounter=0;
+            function elementInfo(el){
+                let id=el.getAttribute('data-codein-id');
+                if(!id){id='el_'+(++idCounter);el.setAttribute('data-codein-id',id);}
+                return {id:id,tag:el.tagName.toLowerCase(),text:(el.innerText||el.textContent||'').trim().slice(0,200),role:el.getAttribute('role')||'',ariaLabel:el.getAttribute('aria-label')||'',placeholder:el.getAttribute('placeholder')||'',type:el.getAttribute('type')||''};
             }
-        })()
-        """.trimIndent()
+            function isVisible(el){const style=window.getComputedStyle(el);return style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&el.getClientRects().length>0;}
+            const interactive=[];
+            document.querySelectorAll('a,button,input,select,textarea,[role="button"],[role="link"],[onclick]').forEach(el=>{if(isVisible(el)&&interactive.length<100)interactive.push(elementInfo(el));});
+            const e=$lookup;
+            $missingElement
+            const target=e?elementInfo(e):null;
+            const pageText=(document.body?.innerText||'').slice(0,12000);
+            return {ok:true,site:location.hostname,title:document.title,url:location.href,text:pageText,page_text:pageText,interactive_elements:interactive,element:target,target_element:target};
+        }catch(x){return {ok:false,error:String(x).slice(0,300)}}})()"""
     }
 
     private fun clickScript(selector: String): String {
-        val select = JSONObject.quote(selector)
-        return """
-        (function() {
-            try {
-                const e = document.querySelector($select) || document.querySelector('[data-codein-id="' + $select + '"]');
-                if (!e) return { ok: false, error: 'No element matches ' + $select };
-                
-                // Visual feedback
-                const originalOutline = e.style.outline;
-                e.style.outline = '3px solid #42A5F5';
-                e.style.outlineOffset = '2px';
-                setTimeout(() => { e.style.outline = originalOutline; }, 1000);
-
-                e.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                
-                const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-                e.dispatchEvent(clickEvent);
-                if (typeof e.click === 'function') e.click();
-                
-                return { ok: true, action: 'click', site: location.hostname };
-            } catch (x) {
-                return { ok: false, error: String(x) };
-            }
-        })()
-        """.trimIndent()
+        val select = browserElementExpression(selector)
+        return """(function(){try{const e=$select;if(!e)return {ok:false,error:'Element not found'};if(e.disabled)return {ok:false,error:'Element is disabled'};if(!e.getClientRects().length)return {ok:false,error:'Target is not visible'};const label=(e.innerText||e.getAttribute('aria-label')||e.textContent||e.tagName).trim().slice(0,300);const originalOutline=e.style.outline;e.style.outline='3px solid #42A5F5';e.style.outlineOffset='2px';setTimeout(()=>{e.style.outline=originalOutline;},1000);e.scrollIntoView({behavior:'smooth',block:'center'});e.click();return {ok:true,action:'click',target:label,site:location.hostname};}catch(x){return {ok:false,error:String(x).slice(0,300)}}})()"""
     }
 
-    private fun fillScript(selector: String, value: String, secret: Boolean): String {
-        val select = JSONObject.quote(selector)
-        val quotedValue = JSONObject.quote(value)
-        return """
-        (function() {
-            try {
-                const e = document.querySelector($select) || document.querySelector('[data-codein-id="' + $select + '"]');
-                if (!e) return { ok: false, error: 'No element matches ' + $select };
-                
-                if (e.disabled || e.readOnly) return { ok: false, error: 'Field is disabled or read-only' };
-                
-                e.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                e.focus();
-                
-                const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : 
-                            e instanceof HTMLSelectElement ? HTMLSelectElement.prototype : 
-                            HTMLInputElement.prototype;
-                const set = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-                if (set) set.call(e, $quotedValue);
-                else e.value = $quotedValue;
-                
-                e.dispatchEvent(new Event('input', { bubbles: true }));
-                e.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                return { ok: true, action: 'fill', tag: e.tagName.toLowerCase() };
-            } catch (x) {
-                return { ok: false, error: String(x) };
-            }
-        })()
-        """.trimIndent()
-    }
 }
+
+internal fun browserFillScript(selector: String, value: String, secret: Boolean): String {
+    val select = selector.takeIf(String::isNotBlank)
+        ?.let(::browserElementExpression)
+        ?: "document.activeElement"
+    val missingElement = if (selector.isBlank()) "No focused element found" else "Element not found"
+    val quotedValue = JSONObject.quote(value)
+    val guard = if (secret) {
+        "if(!(e instanceof HTMLInputElement)||e.type.toLowerCase()!=='password')return {ok:false,error:'Saved credentials can only be entered into a password field'};if(!e.getClientRects().length)return {ok:false,error:'Target is not visible'};"
+    } else {
+        "if((e instanceof HTMLInputElement)&&['password','hidden','file'].includes(e.type.toLowerCase()))return {ok:false,error:'This field requires a saved credential or cannot be filled'};if(!e.getClientRects().length)return {ok:false,error:'Target is not visible'};"
+    }
+    val catchResult = if (secret) {
+        "return {ok:false,error:'Saved credential could not be entered'}"
+    } else {
+        "return {ok:false,error:String(x).slice(0,300)}"
+    }
+    val setValue = if (secret) {
+        "const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;if(set)set.call(e,$quotedValue);else e.value=$quotedValue;"
+    } else {
+        "if(e.isContentEditable){e.textContent=$quotedValue;}else{const proto=e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:e instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;const set=Object.getOwnPropertyDescriptor(proto,'value')?.set;if(set)set.call(e,$quotedValue);else e.value=$quotedValue;}"
+    }
+    val editableCheck = if (secret) {
+        ""
+    } else {
+        "if(!(e instanceof HTMLInputElement||e instanceof HTMLTextAreaElement||e instanceof HTMLSelectElement||e.isContentEditable))return {ok:false,error:'Target is not an editable form field or contenteditable element'};"
+    }
+    return """(function(){try{const e=$select;if(!e||e===document.body||e===document.documentElement)return {ok:false,error:${JSONObject.quote(missingElement)}};$guard if(e.disabled||e.readOnly)return {ok:false,error:'Field is disabled or read-only'};$editableCheck e.scrollIntoView({behavior:'smooth',block:'center'});e.focus();$setValue e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true,action:'fill',tag:e.tagName.toLowerCase(),value_returned:false};}catch(x){$catchResult}})()"""
+}
+
+internal fun browserElementExpression(selector: String): String =
+    if (selector.matches(Regex("el_[0-9]+"))) {
+        "document.querySelector('[data-codein-owned-id=\\\"true\\\"][data-codein-id=\\\"$selector\\\"]')"
+    } else {
+        "document.querySelector(${JSONObject.quote(selector)})"
+    }
 
 @Composable
 internal fun CodeinBrowserToolbar(
@@ -588,7 +633,11 @@ internal fun BrowserActionApprovalCard(
                     Uri.parse(normalizeBrowserUrl(request.url).orEmpty()).host
                 } else Uri.parse(page.url).host
                 Text("Site: ${shownHost.orEmpty().ifBlank { "no page" }}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (request.selector.isNotBlank()) Text("Target: ${request.selector}", fontSize = 11.sp, maxLines = 2)
+                if (request.selector.isNotBlank()) {
+                    Text("Target: ${request.selector}", fontSize = 11.sp, maxLines = 2)
+                } else if (request.action == "fill") {
+                    Text("Target: the currently focused field", fontSize = 11.sp)
+                }
                 when (request.action) {
                     "navigate" -> Text("Open: ${request.url}", fontSize = 11.sp, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     "click" -> Text("Click the selected page element.", fontSize = 11.sp)
