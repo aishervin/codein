@@ -60,7 +60,7 @@ fun CodeinSettingsSheet(
     modelActive: Boolean,
     termuxConnected: Boolean,
     onOpenHistory: () -> Unit,
-    onOpenTermux: () -> Unit,
+    onOpenTermux: (Int) -> Unit,
     onOpenIntegrations: () -> Unit,
     onOpenToolTokens: () -> Unit,
     onOpenPatches: () -> Unit,
@@ -79,63 +79,75 @@ fun CodeinSettingsSheet(
             containerColor = MaterialTheme.colorScheme.surface
         ) {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
-                SheetTitle(Icons.Default.Settings, "Settings", "Connections, tools and app options")
+                SheetTitle(Icons.Default.Settings, "Settings", "پیکربندی و مدیریت سیستم")
                 Spacer(Modifier.height(18.dp))
-                SettingSection("CONNECTIONS")
+
+                SettingSection("AI MODELS & TOKENS")
                 SettingRow(
-                    icon = Icons.Default.Settings,
-                    title = "Termux connection",
-                    subtitle = if (termuxConnected) "Connected · manage AI models and local bridge" else "Connect the local bridge and configure AI models",
-                    onClick = onOpenTermux
+                    icon = Icons.Default.Extension,
+                    title = "مدل‌های هوش مصنوعی",
+                    subtitle = "انتخاب سرویس، مدل و استعلام API",
+                    onClick = { onOpenTermux(0) }
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
+                SettingRow(
+                    icon = Icons.Default.Extension, // You might want a different icon for vault
+                    title = "ذخیره توکن و اعتبارنامه‌ها",
+                    subtitle = "مدیریت کلیدها در خزانه محلی Termux",
+                    enabled = termuxConnected,
+                    onClick = { onOpenTermux(3) }
+                )
+
+                Spacer(Modifier.height(16.dp))
+                SettingSection("TERMINAL")
+                SettingRow(
+                    icon = painterResource(R.drawable.ic_termux), 
+                    title = "اتصال Termux",
+                    subtitle = if (termuxConnected) "پل MCP متصل است · localhost:8765" else "تنظیم و راه‌اندازی پل ارتباطی محلی",
+                    onClick = { onOpenTermux(1) }
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
                 SettingRow(
                     icon = Icons.Default.Language,
-                    title = "Tool integrations",
-                    subtitle = if (modelActive && termuxConnected) "Create OAuth links with the active AI model" else "Connect Termux and select a Termux-backed model first",
+                    title = "سرویس‌های متصل (Composio)",
+                    subtitle = if (modelActive && termuxConnected) "مدیریت اتصال‌های OAuth" else "نیاز به مدل فعال و پل متصل دارد",
                     enabled = modelActive && termuxConnected,
                     onClick = onOpenIntegrations
                 )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
-                SettingRow(
-                    icon = Icons.Default.Extension,
-                    title = "Local tool tokens",
-                    subtitle = "Manage credentials stored in the Termux vault",
-                    enabled = termuxConnected,
-                    onClick = onOpenToolTokens
-                )
+
                 Spacer(Modifier.height(16.dp))
-                SettingSection("LIBRARY")
+                SettingSection("HISTORY & DATA")
                 SettingRow(
                     icon = Icons.Default.History,
-                    title = "Chat history",
-                    subtitle = "Open or remove saved conversations",
+                    title = "تاریخچه گفت‌وگوها",
+                    subtitle = "مشاهده یا حذف نشست‌های ذخیره شده",
                     onClick = onOpenHistory
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
                 SettingRow(
+                    icon = Icons.Default.DeleteSweep,
+                    title = "پاکسازی داده‌های مرورگر",
+                    subtitle = "حذف کوکی‌ها و نشست‌های مرورگر داخلی",
+                    onClick = {
+                        onClearSession()
+                        Toast.makeText(context, "Browser data cleared", Toast.LENGTH_SHORT).show()
+                    }
+                )
+
+                Spacer(Modifier.height(16.dp))
+                SettingSection("SYSTEM")
+                SettingRow(
                     icon = Icons.Default.Download,
-                    title = "Patches & plugins",
-                    subtitle = "Review updates and available skills",
-                    onClick = onOpenPatches
+                    title = "آپدیت‌ها و پچ‌های سیستمی",
+                    subtitle = "بررسی فایل‌های جدید و مخزن Codein",
+                    onClick = { onOpenTermux(2) }
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
                 SettingRow(
                     icon = Icons.Default.Info,
-                    title = "About",
-                    subtitle = "App information and links",
+                    title = "درباره Codein",
+                    subtitle = "اطلاعات برنامه و لینک‌های توسعه‌دهنده",
                     onClick = onOpenAbout
-                )
-                Spacer(Modifier.height(16.dp))
-                SettingSection("BROWSER")
-                SettingRow(
-                    icon = Icons.Default.DeleteSweep,
-                    title = "Clear browser session",
-                    subtitle = "Remove browser cookies and local session data",
-                    onClick = {
-                        onClearSession()
-                        Toast.makeText(context, "Browser session cleared", Toast.LENGTH_SHORT).show()
-                    }
                 )
                 Spacer(Modifier.height(24.dp))
             }
@@ -197,7 +209,7 @@ private fun SheetTitle(icon: ImageVector, title: String, subtitle: String) {
 
 @Composable
 private fun SettingRow(
-    icon: ImageVector,
+    icon: Any, // Can be ImageVector or Painter
     title: String,
     subtitle: String,
     enabled: Boolean = true,
@@ -207,7 +219,10 @@ private fun SettingRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(vertical = 14.dp)
     ) {
-        Icon(icon, contentDescription = null, tint = if (enabled) NeonOrange else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f), modifier = Modifier.size(23.dp))
+        when (icon) {
+            is ImageVector -> Icon(icon, contentDescription = null, tint = if (enabled) NeonOrange else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f), modifier = Modifier.size(23.dp))
+            is androidx.compose.ui.graphics.painter.Painter -> Icon(icon, contentDescription = null, tint = if (enabled) NeonOrange else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f), modifier = Modifier.size(23.dp))
+        }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.SemiBold, color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
