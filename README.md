@@ -75,8 +75,8 @@
 ```bash
 pkg install -y curl
 curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash
+```
 
 <p dir="rtl" align="right">پس از راه‌اندازی، توکن اتصال محلی را در تنظیمات CODΞiN وارد کنید. سرویس ارتباطی به‌صورت پیش‌فرض فقط روی <bdi dir="ltr"><code>127.0.0.1</code></bdi> در دسترس است و از شبکه‌ی محلی قابل دسترسی نیست.</p><p dir="rtl" align="right">در صورت نصب فایل APK خارج از Google Play، ممکن است Android هشدار امنیتی عمومی نمایش دهد. برای اطمینان از اصالت فایل، آن را فقط از صفحه‌ی انتشار رسمی این مخزن دریافت کنید.</p><h2 dir="rtl" align="right">حریم خصوصی و امنیت</h2><p dir="rtl" align="right">CODΞiN با هدف فراهم‌کردن محیطی متمرکز و قابل‌کنترل برای کاربر طراحی شده است. کلیدهای سرویس‌دهنده در مخزن محلی Termux نگهداری می‌شوند و اجرای فرمان‌های محلی به تأیید کاربر نیاز دارد.</p><p dir="rtl" align="right">ارتباط پل MCP به میزبان محلی محدود است. برای دریافت پاسخ، محتوای گفتگو به سرویس‌دهنده‌ی مدل انتخاب‌شده ارسال می‌شود؛ بنابراین نحوه‌ی پردازش و نگهداری داده‌ها تابع سیاست‌های همان سرویس‌دهنده نیز خواهد بود.</p><h2 dir="rtl" align="right">ارتباط و مشارکت</h2><p dir="rtl" align="right">برای گزارش مشکلات، ارائه‌ی پیشنهادها یا اطلاع از انتشار نسخه‌های جدید، می‌توانید از پیوندهای ارتباطی بالای این صفحه استفاده کنید.</p><p align="center"><img src="docs/assets/neon-divider.svg" alt="" width="100%" /></p><div dir="ltr" align="center">
   <sub>Designed and crafted for focused conversations and code · SHΞЯVIN™</sub>
 </div>
-```
