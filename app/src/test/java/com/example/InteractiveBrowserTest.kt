@@ -51,7 +51,7 @@ class InteractiveBrowserTest {
         val script = browserFillScript("", "Hello", secret = false)
         assertTrue(script.contains("document.activeElement"))
         assertTrue(script.contains("e.isContentEditable"))
-        assertTrue(script.contains("Element not found"))
+        assertTrue(script.contains("No focused element found"))
         val savedCredentialScript = browserFillScript("input[type=password]", "secret", secret = true)
         assertTrue(savedCredentialScript.contains("password"))
         assertFalse(savedCredentialScript.contains("e.isContentEditable"))
