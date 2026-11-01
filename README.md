@@ -4,7 +4,7 @@
   <img src="docs/assets/codin-neon-header-v2.svg" alt="CODΞiN™ — SHΞN™ Coder" width="100%" />
 </div>
 
-<p dir="rtl" align="center"><strong>یک فضای متمرکز برای گفتگو، ایده‌پردازی ، کدنویسی حتی بیلد و دیپلوی کردن سورس های غیر مجاز شماست .</strong></p>
+<p dir="rtl" align="center"><strong>یک فضای متمرکز برای گفتگو، ایده‌پردازی ، کدنویسی حتی بیلد کردن سورس های غیر مجاز شماست .</strong></p>
 
 <p dir="ltr" align="center">
   <a href="https://github.com/aishervin/codein" title="GitHub"><img src="https://cdn.simpleicons.org/github/8b949e" alt="GitHub" width="34" /></a>
