@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,25 +19,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,12 +42,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.termux.TermuxBridgeClient
 import com.example.ui.theme.NeonOrange
 import com.example.ui.theme.NeonOrangeSoft
 import com.example.ui.theme.TextMuted
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
 
 private data class ComposioService(
     val toolkit: String,
@@ -78,55 +70,13 @@ private val composioServices = listOf(
 fun CodeinIntegrationsSheet(
     sheetState: SheetState,
     onDismiss: () -> Unit,
-    termuxClient: TermuxBridgeClient,
-    workerUrl: String,
     bridgeReady: Boolean,
     agentReady: Boolean,
     agentBusy: Boolean,
     statuses: Map<String, String>,
-    onStatusChange: (String, String) -> Unit,
-    onRequestConnectionLink: (String, String) -> Unit,
-    onCheckComposioStatus: (String, String) -> Unit
+    onRequestConnectionLink: (String, String) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
-    var isPreparing by remember { mutableStateOf(false) }
-    var platformReady by remember { mutableStateOf(false) }
-    var setupStatus by remember { mutableStateOf("") }
-    var toolCount by remember { mutableIntStateOf(0) }
-    val scope = rememberCoroutineScope()
-
-    suspend fun preparePlatform() {
-        if (!bridgeReady) {
-            setupStatus = "Connect the Termux bridge before setting up Composio."
-            return
-        }
-        if (!workerUrl.startsWith("https://") || !workerUrl.contains(".workers.dev")) {
-            setupStatus = "The Composio service endpoint is not available in this app build."
-            return
-        }
-        isPreparing = true
-        setupStatus = "Preparing this device's private Composio identity…"
-        try {
-            termuxClient.configureComposioPlatform(workerUrl)
-            val tools = termuxClient.refreshComposioTools().optJSONArray("tools")
-            toolCount = tools?.length() ?: 0
-            platformReady = toolCount > 0
-            setupStatus = if (platformReady) {
-                "Ready · $toolCount Composio tools available. No account is marked active until verified."
-            } else {
-                "The identity is ready, but Composio returned no tools yet. Try refresh again."
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            platformReady = false
-            setupStatus = "Setup failed: ${(error.message ?: "Unknown error").take(180)}"
-        } finally {
-            isPreparing = false
-        }
-    }
-
-    LaunchedEffect(bridgeReady, workerUrl) { preparePlatform() }
 
     val normalizedQuery = query.trim().lowercase()
     val filteredServices = if (normalizedQuery.isBlank()) composioServices else {
@@ -167,32 +117,11 @@ fun CodeinIntegrationsSheet(
                 }
             }
             Text(
-                "Choose a service to ask the active AI model for a Composio sign-in link. The link appears as a button in chat and opens in your external browser.",
+                "Tap a service to ask the active AI model for a Composio sign-in link. It will appear in chat and open in your external browser.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
                 lineHeight = 17.sp
             )
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .72f),
-                shape = RoundedCornerShape(15.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    if (isPreparing) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    else Icon(Icons.Default.Extension, contentDescription = null, tint = if (platformReady) Color(0xFF4DDB8A) else NeonOrangeSoft, modifier = Modifier.size(19.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(if (platformReady) "Composio ready" else "Composio setup", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Text(setupStatus.ifBlank { "Preparing…" }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp)
-                    }
-                    if (!isPreparing && bridgeReady && !platformReady) {
-                        OutlinedButton(onClick = { scope.launch { preparePlatform() } }) { Text("Refresh") }
-                    }
-                }
-            }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -207,7 +136,7 @@ fun CodeinIntegrationsSheet(
             } else if (agentBusy) {
                 Text("Finish the current chat action before requesting another integration.", color = NeonOrangeSoft, fontSize = 11.sp)
             } else if (!agentReady) {
-                Text("Select an active Termux-backed AI model to create links and check connections.", color = NeonOrangeSoft, fontSize = 11.sp)
+                Text("Select an active Termux-backed AI model to create connection links in chat.", color = NeonOrangeSoft, fontSize = 11.sp)
             }
             if (shownServices.isEmpty()) {
                 Text("No matching services. Search by name to request another Composio service.", color = TextMuted, fontSize = 12.sp)
@@ -216,13 +145,8 @@ fun CodeinIntegrationsSheet(
                 IntegrationServiceCard(
                     service = service,
                     status = statuses[service.toolkit] ?: "unknown",
-                    connectEnabled = platformReady && bridgeReady && agentReady && !agentBusy && !isPreparing,
-                    checkEnabled = platformReady && agentReady && !agentBusy && !isPreparing,
-                    onConnect = { onRequestConnectionLink(service.toolkit, service.title) },
-                    onCheck = {
-                        onStatusChange(service.toolkit, "checking")
-                        onCheckComposioStatus(service.toolkit, service.title)
-                    }
+                    connectEnabled = bridgeReady && agentReady && !agentBusy,
+                    onConnect = { onRequestConnectionLink(service.toolkit, service.title) }
                 )
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
@@ -236,9 +160,7 @@ private fun IntegrationServiceCard(
     service: ComposioService,
     status: String,
     connectEnabled: Boolean,
-    checkEnabled: Boolean,
-    onConnect: () -> Unit,
-    onCheck: () -> Unit
+    onConnect: () -> Unit
 ) {
     val (statusLabel, statusColor) = when (status) {
         "active" -> "Active" to Color(0xFF4DDB8A)
@@ -250,7 +172,7 @@ private fun IntegrationServiceCard(
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .6f),
         shape = RoundedCornerShape(17.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().clickable(enabled = connectEnabled, onClick = onConnect)
     ) {
         Column(Modifier.fillMaxWidth().padding(13.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
@@ -271,11 +193,16 @@ private fun IntegrationServiceCard(
                 }
                 Text(statusLabel, color = statusColor, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onConnect, enabled = connectEnabled, modifier = Modifier.weight(1f)) {
-                    Text("Create link in chat")
-                }
-                OutlinedButton(onClick = onCheck, enabled = checkEnabled, modifier = Modifier.weight(1f)) { Text("Check status") }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    "Tap to create link in chat",
+                    color = if (connectEnabled) NeonOrangeSoft else TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }
