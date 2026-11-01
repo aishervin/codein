@@ -1,0 +1,4 @@
+# Telegram Serverless Bot Maker Patch
+- Interactive setup for Telegram Bot Token & Cloudflare Worker / Serverless backend.
+- Generates standard ES module bot code.
+- Ready for deployment via GitHub Actions & Cloudflare Workers.
