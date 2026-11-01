@@ -158,16 +158,24 @@ internal class CodeinBrowserController {
         return WebView(context).also { view ->
             webView = view
             view.setBackgroundColor(android.graphics.Color.WHITE)
+            view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
             view.settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
+                databaseEnabled = true
+                loadWithOverviewMode = true
+                useWideViewPort = true
+                builtInZoomControls = true
+                displayZoomControls = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 userAgentString = WebSettings.getDefaultUserAgent(context)
+                    .replace("; wv", "") 
+                    .replace("Version/4.0 ", "") // Act more like Chrome Desktop/Mobile
                 allowFileAccess = false
-                allowContentAccess = false
+                allowContentAccess = true
                 allowFileAccessFromFileURLs = false
                 allowUniversalAccessFromFileURLs = false
-                javaScriptCanOpenWindowsAutomatically = false
+                javaScriptCanOpenWindowsAutomatically = true
                 setSupportMultipleWindows(false)
                 mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) safeBrowsingEnabled = true
@@ -316,31 +324,121 @@ internal class CodeinBrowserController {
     }
 
     private fun inspectScript(selector: String): String {
-        val lookup = selector.takeIf(String::isNotBlank)
-            ?.let { "document.querySelector(${JSONObject.quote(it)})" }
-            ?: "null"
-        return """(function(){try{const e=$lookup;return {ok:true,site:location.hostname,title:document.title,text:(document.body?.innerText||"").slice(0,12000),element:e?{tag:e.tagName.toLowerCase(),text:(e.innerText||e.textContent||"").trim().slice(0,1000),ariaLabel:e.getAttribute('aria-label')||"",placeholder:e.getAttribute('placeholder')||"",type:e.getAttribute('type')||""}:null};}catch(x){return {ok:false,error:String(x).slice(0,300)}}})()"""
+        val quotedSelector = JSONObject.quote(selector)
+        return """
+        (function() {
+            try {
+                const MAX_TEXT_LENGTH = 8000;
+                const interactiveTags = ['a', 'button', 'input', 'select', 'textarea', 'label'];
+                
+                function isVisible(el) {
+                    const style = window.getComputedStyle(el);
+                    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && el.getClientRects().length > 0;
+                }
+
+                function getElementInfo(el, id) {
+                    el.setAttribute('data-codein-id', id);
+                    return {
+                        id: id,
+                        tag: el.tagName.toLowerCase(),
+                        text: (el.innerText || el.value || "").trim().slice(0, 200),
+                        role: el.getAttribute('role') || "",
+                        placeholder: el.getAttribute('placeholder') || "",
+                        ariaLabel: el.getAttribute('aria-label') || "",
+                        type: el.getAttribute('type') || ""
+                    };
+                }
+
+                const elements = [];
+                let idCounter = 0;
+                const all = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [role="link"], [onclick]');
+                
+                all.forEach(el => {
+                    if (isVisible(el)) {
+                        elements.push(getElementInfo(el, 'el_' + (++idCounter)));
+                    }
+                });
+
+                let target = null;
+                if ($quotedSelector && $quotedSelector !== "null") {
+                    const el = document.querySelector($quotedSelector);
+                    if (el) target = getElementInfo(el, 'target');
+                }
+
+                return {
+                    ok: true,
+                    site: location.hostname,
+                    title: document.title,
+                    url: location.href,
+                    interactive_elements: elements.slice(0, 100),
+                    page_text: (document.body?.innerText || "").slice(0, MAX_TEXT_LENGTH),
+                    target_element: target
+                };
+            } catch (x) {
+                return { ok: false, error: String(x) };
+            }
+        })()
+        """.trimIndent()
     }
 
     private fun clickScript(selector: String): String {
         val select = JSONObject.quote(selector)
-        return """(function(){try{const e=document.querySelector($select);if(!e)return {ok:false,error:'No element matches selector'};if(e.disabled)return {ok:false,error:'Element is disabled'};if(!e.getClientRects().length)return {ok:false,error:'Target is not visible'};const label=(e.innerText||e.getAttribute('aria-label')||e.textContent||e.tagName).trim().slice(0,300);e.click();return {ok:true,action:'click',target:label,site:location.hostname};}catch(x){return {ok:false,error:String(x).slice(0,300)}}})()"""
+        return """
+        (function() {
+            try {
+                const e = document.querySelector($select) || document.querySelector('[data-codein-id="' + $select + '"]');
+                if (!e) return { ok: false, error: 'No element matches ' + $select };
+                
+                // Visual feedback
+                const originalOutline = e.style.outline;
+                e.style.outline = '3px solid #42A5F5';
+                e.style.outlineOffset = '2px';
+                setTimeout(() => { e.style.outline = originalOutline; }, 1000);
+
+                e.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                
+                const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                e.dispatchEvent(clickEvent);
+                if (typeof e.click === 'function') e.click();
+                
+                return { ok: true, action: 'click', site: location.hostname };
+            } catch (x) {
+                return { ok: false, error: String(x) };
+            }
+        })()
+        """.trimIndent()
     }
 
     private fun fillScript(selector: String, value: String, secret: Boolean): String {
         val select = JSONObject.quote(selector)
         val quotedValue = JSONObject.quote(value)
-        val guard = if (secret) {
-            "if(!(e instanceof HTMLInputElement)||e.type.toLowerCase()!=='password')return {ok:false,error:'Saved credentials can only be entered into a password field'};if(!e.getClientRects().length)return {ok:false,error:'Target is not visible'};"
-        } else {
-            "if((e instanceof HTMLInputElement)&&['password','hidden','file'].includes(e.type.toLowerCase()))return {ok:false,error:'This field requires a saved credential or cannot be filled'};if(!e.getClientRects().length)return {ok:false,error:'Target is not visible'};"
-        }
-        val catchResult = if (secret) {
-            "return {ok:false,error:'Saved credential could not be entered'}"
-        } else {
-            "return {ok:false,error:String(x).slice(0,300)}"
-        }
-        return """(function(){try{const e=document.querySelector($select);if(!e)return {ok:false,error:'No element matches selector'};$guard if(e.disabled||e.readOnly)return {ok:false,error:'Field is disabled or read-only'};if(!(e instanceof HTMLInputElement||e instanceof HTMLTextAreaElement||e instanceof HTMLSelectElement))return {ok:false,error:'Target is not an editable form field'};e.focus();const proto=e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:e instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;const set=Object.getOwnPropertyDescriptor(proto,'value')?.set;if(set)set.call(e,$quotedValue);else e.value=$quotedValue;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true,action:'fill',tag:e.tagName.toLowerCase(),value_returned:false};}catch(x){$catchResult}})()"""
+        return """
+        (function() {
+            try {
+                const e = document.querySelector($select) || document.querySelector('[data-codein-id="' + $select + '"]');
+                if (!e) return { ok: false, error: 'No element matches ' + $select };
+                
+                if (e.disabled || e.readOnly) return { ok: false, error: 'Field is disabled or read-only' };
+                
+                e.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                e.focus();
+                
+                const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : 
+                            e instanceof HTMLSelectElement ? HTMLSelectElement.prototype : 
+                            HTMLInputElement.prototype;
+                const set = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                if (set) set.call(e, $quotedValue);
+                else e.value = $quotedValue;
+                
+                e.dispatchEvent(new Event('input', { bubbles: true }));
+                e.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                return { ok: true, action: 'fill', tag: e.tagName.toLowerCase() };
+            } catch (x) {
+                return { ok: false, error: String(x) };
+            }
+        })()
+        """.trimIndent()
     }
 }
 
