@@ -90,7 +90,7 @@ fun ShenMainApp(viewModel: MainViewModel, isFa: Boolean) {
                 NavigationBarItem(
                     selected = selectedTab == "chat",
                     onClick = { selectedTab = "chat" },
-                    icon = { Icon(imageVector = Icons.Default.Chat, contentDescription = "Chat") },
+                    icon = { Icon(imageVector = Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat") },
                     label = { Text(if (isFa) "چت" else "Chat") },
                     modifier = Modifier.testTag("nav_chat_tab")
                 )

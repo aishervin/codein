@@ -192,7 +192,7 @@ fun OnboardingScreen(viewModel: MainViewModel) {
                             .weight(1f)
                             .testTag("open_termux_button")
                     ) {
-                        Icon(imageVector = Icons.Default.Launch, contentDescription = "Open")
+                        Icon(imageVector = Icons.AutoMirrored.Filled.Launch, contentDescription = "Open")
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(if (isFa) "باز کردن ترموکس" else "Open Termux")
                     }
