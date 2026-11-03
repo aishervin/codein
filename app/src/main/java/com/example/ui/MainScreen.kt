@@ -3324,13 +3324,12 @@ private fun TermuxAgentRoomDialog(
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("ذخیرهٔ توکن سرویس") }
                 }
-                if (selectedRoomTab == 1 || selectedRoomTab == 0 || selectedRoomTab == 3) {
                 if (output.isNotBlank()) {
                     Surface(color = Color(0xFF111318), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Text(output.takeLast(5000), color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
                     }
                 }
-                }
+            }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("بستن") } },
