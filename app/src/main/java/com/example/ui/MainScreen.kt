@@ -3157,7 +3157,10 @@ private fun TermuxAgentRoomDialog(
                     color = if (aiProviderId == "opencode") NeonOrangeSoft else TextMuted, fontSize = 10.sp
                 )
                 if (aiProviderId == "opencode") {
-                    TextButton(onClick = { openInSystemBrowser("https://opencode.ai/auth") }) {
+                    TextButton(onClick = {
+                        val opened = runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://opencode.ai/auth"))) }.isSuccess
+                        if (!opened) android.widget.Toast.makeText(context, "مرورگر باز نشد", android.widget.Toast.LENGTH_SHORT).show()
+                    }) {
                         Text("دریافت کلید رایگان OpenCode", color = NeonOrangeSoft, fontSize = 12.sp)
                     }
                 }
@@ -3255,7 +3258,6 @@ private fun TermuxAgentRoomDialog(
                         modifier = Modifier.fillMaxWidth()
                 ) { Text("ذخیرهٔ کلید و فعال‌کردن مدل") }
                 }
-                }
 
                 if (selectedRoomTab == 3) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
@@ -3329,7 +3331,6 @@ private fun TermuxAgentRoomDialog(
                         Text(output.takeLast(5000), color = Color(0xFFD4D9E2), fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
                     }
                 }
-            }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("بستن") } },
