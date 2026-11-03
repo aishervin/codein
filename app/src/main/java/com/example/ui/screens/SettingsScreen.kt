@@ -123,7 +123,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                                 selected = provider == p,
                                 onClick = { provider = p }
                             )
-                            Text(text = p.capitalize(), fontSize = 12.sp)
+                            Text(text = p.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }, fontSize = 12.sp)
                         }
                     }
                 }
