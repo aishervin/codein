@@ -263,8 +263,12 @@ private data class CodeinModel(
 // Keep the original built-in WebView modes available; external model IDs are loaded from the provider API.
 private val codeinModels = listOf(
     CodeinModel("zero", "ZERO"),
-    CodeinModel("hero", "HERO")
+    CodeinModel("hero", "HERO"),
+    CodeinModel("mimo-v2.6-flash-free", "OpenCode رایگان · MiMo V2.6 Flash", "opencode"),
+    CodeinModel("ling-3.1-flash-free", "OpenCode رایگان · Ling 3.1 Flash", "opencode")
 )
+
+private val opencodeFreeModels = listOf("mimo-v2.6-flash-free", "ling-3.1-flash-free")
 
 private fun compactAgentRoomContext(raw: String): String {
     val room = runCatching { JSONObject(raw) }.getOrNull() ?: return raw.take(12000)
@@ -505,6 +509,19 @@ private fun MainChatScreen(
                 recordBrowserEvent("Page ready${host.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()}")
             }
         }
+    }
+
+    // First connection: make the free OpenCode model the default chat model,
+    // unless the user already picked one (including the offline ZERO mode).
+    LaunchedEffect(termuxConnected) {
+        if (!termuxConnected) return@LaunchedEffect
+        if (modelPrefs.getString(SELECTED_MODEL_KEY, null) != null) return@LaunchedEffect
+        val free = availableModels.firstOrNull { it.providerId == "opencode" } ?: return@LaunchedEffect
+        selectedModel = free
+        modelPrefs.edit()
+            .putString(SELECTED_MODEL_KEY, free.id)
+            .putString(SELECTED_PROVIDER_KEY, free.providerId.orEmpty())
+            .apply()
     }
 
     // Track Termux independently of the selected chat provider so all screens
@@ -2661,6 +2678,7 @@ private fun TermuxAgentRoomDialog(
     var status by remember { mutableStateOf("") }
     var output by remember { mutableStateOf("") }
     var roomEventLines by remember { mutableStateOf(emptyList<String>()) }
+    var linkLines by remember { mutableStateOf(emptyList<String>()) }
     var terminalCommand by remember { mutableStateOf("") }
     var terminalOutput by remember { mutableStateOf("") }
     var skillNames by remember { mutableStateOf(emptyList<String>()) }
@@ -2822,8 +2840,24 @@ private fun TermuxAgentRoomDialog(
                         val installCommand = "curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash"
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(ClipData.newPlainText("Codein Termux install", installCommand))
-                        output = "دستور نصب/به‌روزرسانی پل MCP کپی شد. آن را در Termux اجرا کن؛ توکن و کلیدهای ذخیره‌شدهٔ قبلی پاک نمی‌شوند. اگر برنامه دوباره توکن خواست، همان توکن قبلی را وارد کن:\n\n" + installCommand + "\n\nبرای راه‌اندازی مجدد از ~/.codein/bin/codein-bridge restart استفاده کن. نسخهٔ پل بعد از اتصال همین‌جا نمایش داده می‌شود."
+                        output = "دستور نصب/به‌روزرسانی پل MCP کپی شد. آن را در Termux اجرا کن؛ توکن و کلیدهای ذخیره‌شدهٔ قبلی پاک نمی‌شوند. اگر برنامه دوباره توکن خواست، همان توکن قبلی را وارد کن:\n\n" + installCommand + "\n\nبرای راه‌اندازی مجدد از ~/.codein/bin/codein-links restart استفاده کن؛ این دستور پل، OpenCode و تونل را موازی بالا می‌آورد. نسخهٔ پل بعد از اتصال همین‌جا نمایش داده می‌شود."
                 }) { Text("کپی دستور نصب / به‌روزرسانی پل MCP") }
+                TextButton(enabled = !busy && token.isNotBlank(), onClick = {
+                    busy = true
+                    client.baseUrl = baseUrl
+                    client.bearerToken = token
+                    scope.launch {
+                        runCatching { client.links() }.onSuccess { links ->
+                            linkLines = links.map { link ->
+                                (if (link.optBoolean("reachable")) "● " else "○ ") +
+                                    link.optString("name", link.optString("id")) + " · " + link.optString("url")
+                            }
+                            if (linkLines.isEmpty()) status = "هیچ اتصال موازی ثبت نشده؛ در Termux دستور ~/.codein/bin/codein-links start را اجرا کن."
+                        }.onFailure { status = "بررسی اتصالات موازی ناموفق: " + (it.message ?: "خطای نامشخص") }
+                        busy = false
+                    }
+                }) { Text("بررسی اتصالات موازی (پل + تونل + OpenCode)") }
+                linkLines.forEach { Text(it, fontSize = 10.sp, color = TextMuted) }
                 }
                 Spacer(Modifier.height(8.dp))
                 Text("گزارش رویدادهای اخیر", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -2851,19 +2885,25 @@ private fun TermuxAgentRoomDialog(
                 }
                 if (selectedRoomTab == 0) {
                 Text("مدل‌های هوش مصنوعی", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                var aiProviderId by remember(integrationPrefs) { mutableStateOf(integrationPrefs.getString("ai_provider", "gemini") ?: "gemini") }
+                var aiProviderId by remember(integrationPrefs) { mutableStateOf(integrationPrefs.getString("ai_provider", "opencode") ?: "opencode") }
                 var aiProviderMenuExpanded by remember { mutableStateOf(false) }
                 var aiModelMenuExpanded by remember { mutableStateOf(false) }
                 var aiKeyValue by remember { mutableStateOf("") }
                 var aiModels by remember(integrationPrefs, aiProviderId) {
                     val cached = runCatching { JSONArray(integrationPrefs.getString("models_$aiProviderId", "[]")) }.getOrDefault(JSONArray())
-                    mutableStateOf((0 until cached.length()).map { cached.optString(it) }.filter(String::isNotBlank))
+                    val stored = (0 until cached.length()).map { cached.optString(it) }.filter(String::isNotBlank)
+                    mutableStateOf(stored.ifEmpty { if (aiProviderId == "opencode") opencodeFreeModels else emptyList() })
                 }
                 var selectedAiModel by remember(integrationPrefs, aiProviderId) {
-                    mutableStateOf(integrationPrefs.getString("selected_model_$aiProviderId", "") ?: "")
+                    mutableStateOf(
+                        (integrationPrefs.getString("selected_model_$aiProviderId", "") ?: "").ifBlank {
+                            if (aiProviderId == "opencode") opencodeFreeModels.first() else ""
+                        }
+                    )
                 }
                 var providerHelp by remember { mutableStateOf(false) }
                 val aiProviders = listOf(
+                    "OpenCode · رایگان (Zen)" to "opencode",
                     "Google Gemini" to "gemini",
                     "OpenAI" to "openai",
                     "DeepSeek" to "deepseek",
@@ -2939,7 +2979,10 @@ private fun TermuxAgentRoomDialog(
                             DropdownMenuItem(enabled = !busy, text = { Text(label) }, onClick = {
                                 aiProviderId = id
                                 aiModels = runCatching { JSONArray(integrationPrefs.getString("models_$id", "[]")) }.getOrDefault(JSONArray()).let { array -> (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank) }
-                                selectedAiModel = integrationPrefs.getString("selected_model_$id", "") ?: ""
+                                    .ifEmpty { if (id == "opencode") opencodeFreeModels else emptyList() }
+                                selectedAiModel = (integrationPrefs.getString("selected_model_$id", "") ?: "").ifBlank {
+                                    if (id == "opencode") opencodeFreeModels.first() else ""
+                                }
                                 integrationPrefs.edit().putString("ai_provider", id).apply()
                                 aiProviderMenuExpanded = false
                             })
@@ -2949,15 +2992,19 @@ private fun TermuxAgentRoomDialog(
                 OutlinedTextField(
                     value = aiKeyValue,
                     onValueChange = { aiKeyValue = it; aiModels = emptyList(); selectedAiModel = "" },
-                    label = { Text("API key سرویس انتخاب‌شده") },
+                    label = { Text(if (aiProviderId == "opencode") "کلید OpenCode (اختیاری)" else "API key سرویس انتخاب‌شده") },
                     singleLine = true,
                     enabled = !busy,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("برای هر مدل یک درخواست واقعی کوتاه فرستاده می‌شود؛ سرویس ممکن است هزینهٔ API بگیرد.", color = NeonOrangeSoft, fontSize = 10.sp)
+                Text(
+                    if (aiProviderId == "opencode") "مدل‌های رایگان OpenCode بدون کلید کار می‌کنند؛ کلید رایگان از opencode.ai/auth فقط سهمیهٔ روزانه را بیشتر می‌کند."
+                    else "برای هر مدل یک درخواست واقعی کوتاه فرستاده می‌شود؛ سرویس ممکن است هزینهٔ API بگیرد.",
+                    color = if (aiProviderId == "opencode") Color(0xFF4DDB8A) else NeonOrangeSoft, fontSize = 10.sp
+                )
                 Button(
-                    enabled = !busy && token.isNotBlank() && aiKeyValue.isNotBlank(),
+                    enabled = !busy && token.isNotBlank() && (aiKeyValue.isNotBlank() || aiProviderId == "opencode"),
                     onClick = {
                         busy = true
                         aiModelMenuExpanded = false
@@ -2978,9 +3025,9 @@ private fun TermuxAgentRoomDialog(
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "در حال استعلام و آزمون…" else "استعلام و آزمون با کلید واردشده") }
+                ) { Text(if (busy) "در حال استعلام و آزمون…" else if (aiProviderId == "opencode" && aiKeyValue.isBlank()) "آزمون مدل‌های رایگان (بدون کلید)" else "استعلام و آزمون با کلید واردشده") }
                 OutlinedButton(
-                    enabled = !busy && token.isNotBlank() && savedKeys.contains("${aiProviderId}_api_key"),
+                    enabled = !busy && token.isNotBlank() && (savedKeys.contains("${aiProviderId}_api_key") || aiProviderId == "opencode"),
                     onClick = {
                         busy = true
                         aiModelMenuExpanded = false
@@ -3003,6 +3050,8 @@ private fun TermuxAgentRoomDialog(
                 ) { Text(if (busy) "در حال استعلام و آزمون…" else "استعلام و آزمون با کلید ذخیره‌شده") }
                 if (savedKeys.contains("${aiProviderId}_api_key")) {
                     Text("کلید این سرویس قبلاً ذخیره شده؛ لازم نیست دوباره واردش کنی.", color = Color(0xFF4DDB8A), fontSize = 11.sp)
+                } else if (aiProviderId == "opencode") {
+                    Text("این سرویس بدون کلید هم کار می‌کند. دو مدل رایگان پیش‌فرض همین‌جا آماده‌اند.", color = Color(0xFF4DDB8A), fontSize = 11.sp)
                 } else {
                     Text("برای اولین اتصال، کلید را وارد و یک‌بار ذخیره کن.", color = TextMuted, fontSize = 11.sp)
                 }
@@ -3023,22 +3072,22 @@ private fun TermuxAgentRoomDialog(
                         }
                     }
                     Button(
-                        enabled = !busy && selectedAiModel.isNotBlank() && aiKeyValue.isNotBlank(),
+                        enabled = !busy && selectedAiModel.isNotBlank() && (aiKeyValue.isNotBlank() || aiProviderId == "opencode"),
                         onClick = {
                             busy = true
                             scope.launch {
                                 runCatching {
-                                    client.saveCredential("${aiProviderId}_api_key", aiKeyValue)
+                                    if (aiKeyValue.isNotBlank()) client.saveCredential("${aiProviderId}_api_key", aiKeyValue)
                                     client.roomContext()
                                 }.onSuccess { room ->
                                     val providerName = aiProviders.firstOrNull { it.second == aiProviderId }?.first ?: aiProviderId
                                     onRoomContextLoaded(room)
                                     onModelSelected(CodeinModel(selectedAiModel, "$providerName · $selectedAiModel", aiProviderId))
-                                    savedKeys = (savedKeys + "${aiProviderId}_api_key").distinct()
+                                    if (aiKeyValue.isNotBlank()) savedKeys = (savedKeys + "${aiProviderId}_api_key").distinct()
                                     integrationPrefs.edit().putString("ai_provider", aiProviderId).putString("selected_model_$aiProviderId", selectedAiModel).apply()
-                                    aiKeyValue = ""
                                     status = "مدل انتخاب شد · $selectedAiModel"
-                                    output = "کلید در خزانه محلی ذخیره شد و مدل انتخاب‌شده فعال شد."
+                                    output = if (aiKeyValue.isNotBlank()) "کلید در خزانه محلی ذخیره شد و مدل انتخاب‌شده فعال شد." else "مدل رایگان فعال شد؛ کلیدی ذخیره نشد."
+                                    aiKeyValue = ""
                                 }.onFailure { error ->
                                     status = "ذخیره یا انتخاب مدل ناموفق: " + (error.message ?: "خطای نامشخص")
                                 }

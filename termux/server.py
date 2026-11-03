@@ -12,7 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
-SERVER_VERSION="1.3.0"
+SERVER_VERSION="1.4.0"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -102,22 +102,32 @@ PROVIDERS = {
     "mistral": {"name":"Mistral","key":"mistral_api_key","base_url":"https://api.mistral.ai/v1","default_model":"","kind":"openai","models":[]},
     "xai": {"name":"xAI Grok","key":"xai_api_key","base_url":"https://api.x.ai/v1","default_model":"","kind":"openai","models":[]},
     "groq": {"name":"Groq","key":"groq_api_key","base_url":"https://api.groq.com/openai/v1","default_model":"","kind":"openai","models":[]},
+    # OpenCode Zen exposes a free OpenAI-compatible tier. A key is optional: free models work
+    # without one, and a free key raises the quota. Two light free models are the defaults.
+    "opencode": {"name":"OpenCode Free","key":"opencode_api_key","base_url":"https://opencode.ai/inference/openai/v1","default_model":"mimo-v2.6-flash-free","kind":"openai","key_optional":True,
+                 "models":["mimo-v2.6-flash-free","ling-3.1-flash-free"]},
 }
 
 def provider_catalog():
-    return [
-        {"id":pid,"name":item["name"],"base_url":item["base_url"],
-         "default_model":item["default_model"],"models":[],
-         "configured":(KEYS/(item["key"]+".json")).is_file(),
-         "credential_name":item["key"]}
-        for pid,item in PROVIDERS.items()
-    ]
+    catalog=[]
+    for pid,item in PROVIDERS.items():
+        optional=bool(item.get("key_optional"))
+        catalog.append({"id":pid,"name":item["name"],"base_url":item["base_url"],
+            "default_model":item["default_model"],"models":list(item.get("models") or []),
+            "key_optional":optional,
+            "configured":optional or (KEYS/(item["key"]+".json")).is_file(),
+            "credential_name":item["key"]})
+    return catalog
 
 def discover_provider_models(pid, api_key):
     provider=PROVIDERS.get(str(pid).strip().lower())
     key=str(api_key or "").strip()
     if not provider: return 400,{"ok":False,"error":"Unsupported provider"}
-    if not key: return 400,{"ok":False,"error":"API key is required"}
+    if not key and not provider.get("key_optional"): return 400,{"ok":False,"error":"API key is required"}
+    if provider.get("key_optional"):
+        # Curated free defaults: probing the whole Zen catalog would be slow and mostly paid.
+        models=list(provider.get("models") or [])
+        return 200,{"ok":True,"provider":pid,"provider_name":provider["name"],"models":models,"free":True,"key_optional":True}
     try:
         if provider["kind"]=="gemini":
             url=provider["base_url"]+"/models?key="+quote(key,safe="")
@@ -336,7 +346,7 @@ def dispatch_mcp_tool(name, args):
         if not provider: raise ValueError("Unsupported provider")
         saved=readj(KEYS/(provider["key"]+".json"),{})
         api_key=str(saved.get("value","")).strip()
-        if not api_key: raise RuntimeError("No saved API key for "+provider["name"]+". Save the key once in Integrations first.")
+        if not api_key and not provider.get("key_optional"): raise RuntimeError("No saved API key for "+provider["name"]+". Save the key once in Integrations first.")
         status,payload=discover_provider_models(pid,api_key)
         if status!=200: raise RuntimeError(str(payload.get("error","Model lookup failed"))+(": "+str(payload.get("detail")) if payload.get("detail") else ""))
         return payload
@@ -547,7 +557,7 @@ def provider_chat(data, emit=None, cancel=None):
     if not provider: return 400,{"ok":False,"error":"Unknown provider","providers":list(PROVIDERS)}
     key_data=readj(KEYS/(provider["key"]+".json"),{})
     api_key=str(data.get("test_api_key") or key_data.get("value","")).strip()
-    if not api_key: return 428,{"ok":False,"error":"missing_api_key","provider":pid,"provider_name":provider["name"],"credential_name":provider["key"],"message":"API key is not configured. Ask the user to provide it in this chat; store it in the local Termux vault before retrying."}
+    if not api_key and not provider.get("key_optional"): return 428,{"ok":False,"error":"missing_api_key","provider":pid,"provider_name":provider["name"],"credential_name":provider["key"],"message":"API key is not configured. Ask the user to provide it in this chat; store it in the local Termux vault before retrying."}
     model=str(data.get("model") or provider["default_model"]).strip()
     messages=data.get("messages") or []
     if not isinstance(messages,list) or not messages: return 400,{"ok":False,"error":"messages must be a non-empty array"}
@@ -665,7 +675,8 @@ def provider_chat(data, emit=None, cancel=None):
             msgs.extend(item for item in clean if item["role"]!="system")
             tools=[{"type":"function","function":{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]}} for tool in tool_catalog]
             url=provider["base_url"].rstrip("/")+"/chat/completions"
-            headers={"Content-Type":"application/json","Authorization":"Bearer "+api_key}
+            headers={"Content-Type":"application/json"}
+            if api_key: headers["Authorization"]="Bearer "+api_key
             for attempt in range(9):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline:
@@ -746,6 +757,31 @@ def readj(p, fallback):
 def event(kind,data):
     with (EVENTS/"journal.jsonl").open("a",encoding="utf-8") as f: f.write(json.dumps({"at":now(),"kind":kind,"data":data},ensure_ascii=False)+"\n")
 
+def probe_links():
+    """Return the parallel connection set recorded by codein-links, probed concurrently."""
+    record=readj(ROOT/"links.json",{})
+    links=[dict(item) for item in record.get("links",[]) if isinstance(item,dict) and item.get("url")]
+    def check(item):
+        kind=str(item.get("kind",""))
+        target=str(item["url"]).rstrip("/")
+        if kind=="opencode": target+="/global/health"
+        elif kind in ("bridge","tunnel"): target+="/health"
+        headers={"Authorization":"Bearer "+TOKEN} if TOKEN and kind in ("bridge","tunnel") else {}
+        try:
+            with urlopen(Request(target,headers=headers),timeout=3) as response:
+                item["reachable"]=response.status<500
+        except HTTPError as exc:
+            item["reachable"]=exc.code<500
+        except Exception:
+            item["reachable"]=False
+        return item
+    results=[None]*len(links)
+    def worker(index,item): results[index]=check(item)
+    threads=[threading.Thread(target=worker,args=(index,item),daemon=True) for index,item in enumerate(links)]
+    for thread in threads: thread.start()
+    for thread in threads: thread.join(timeout=4)
+    return [item for item in results if item is not None]
+
 class Handler(BaseHTTPRequestHandler):
     server_version="CodeinTermux/1.0"
     def log_message(self,*args): pass
@@ -785,6 +821,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.sendj(200,{"ok":True,"root":str(ROOT),"workspace":str(WORKSPACE),"room":room_file.read_text(encoding="utf-8") if room_file.exists() else "","state":readj(ROOT/"state.json",{}),"credentials":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file()),"events":events,"sessions":sessions,"skills":skills})
         if p=="/api/keys": return self.sendj(200,{"ok":True,"keys":sorted(x.stem for x in KEYS.glob("*.json") if x.is_file())})
         if p=="/api/providers": return self.sendj(200,{"ok":True,"providers":provider_catalog()})
+        if p=="/api/links": return self.sendj(200,{"ok":True,"links":probe_links()})
         if p.startswith("/api/keys/"):
             name=unquote(p[len("/api/keys/"):]).strip()
             if not name or "/" in name or "\\" in name: return self.sendj(400,{"ok":False,"error":"Invalid key name"})

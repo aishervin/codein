@@ -15,9 +15,32 @@ curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein
 
 The bootstrap installs `python git openssh curl`, initializes `~/.codein`, creates a local bearer token only on first setup, and starts the MCP service in the background with a restart loop. Re-running the installer updates the bridge while preserving the paired app's token. **Do not separately run `python ~/.codein/server.py` after bootstrap**; it can collide with the already-running server on port 8765.
 
-Copy the private token printed by the installer into Codein's Termux connection dialog. The service binds only to `127.0.0.1`; it is not exposed to the LAN. Keep Termux alive while Codein is working. If Android suspends the process, the bootstrap's supervisor restarts the Python server when it exits.
+Copy the private token printed by the installer into Codein's Termux connection dialog. Keep Termux alive while Codein is working. If Android suspends the process, the bootstrap's supervisor restarts the Python server when it exits.
 
 Logs: `~/.codein/logs/server.log`
+
+## Parallel connections
+
+`codein-links` starts and supervises three transports at the same time instead of one after another:
+
+- `bridge` — the local MCP server on `http://127.0.0.1:8765`
+- `opencode` — the local OpenCode API on `http://127.0.0.1:4096`
+- `tunnel` — a Cloudflare Quick Tunnel that publishes the bridge over HTTPS
+
+A watchdog checks every 10 seconds and restarts whatever died, so both directions stay open while you work.
+
+```bash
+~/.codein/bin/codein-links start     # bring all links up in parallel
+~/.codein/bin/codein-links status    # JSON list of URLs and PIDs
+~/.codein/bin/codein-links logs      # watchdog + tunnel logs
+~/.codein/bin/codein-links stop      # stop tunnel, OpenCode and watchdog
+```
+
+The Quick Tunnel URL is public but every request still needs the pairing bearer token; the bridge itself keeps listening on loopback only. In the app, the Termux tab can probe the links and shows which ones answer.
+
+## Free default models
+
+The provider `opencode` uses the OpenCode Zen OpenAI-compatible endpoint and needs no API key for its free tier. Codein defaults to two light free models, `mimo-v2.6-flash-free` and `ling-3.1-flash-free`; both support tool calls, so the agent loop still works. A free key from `https://opencode.ai/auth` is optional and only raises the daily quota.
 
 ## In-app Codein Browser
 

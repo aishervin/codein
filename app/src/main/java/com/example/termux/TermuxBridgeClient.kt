@@ -115,6 +115,13 @@ class TermuxBridgeClient(context: Context) {
         }
     }
 
+    /** Parallel transports kept alive by codein-links (bridge, Quick Tunnel, OpenCode). */
+    suspend fun links(): List<JSONObject> {
+        val result = request("GET", "/api/links")
+        val array = result.optJSONArray("links") ?: JSONArray()
+        return (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    }
+
     /** Query the provider's live model endpoint using the entered key without saving or logging it. */
     suspend fun discoverModels(provider: String, apiKey: String): List<String> {
         require(provider.isNotBlank()) { "Select an AI provider first" }

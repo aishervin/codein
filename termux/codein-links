@@ -1,0 +1,198 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Keep several Codein transports alive in parallel: the local MCP bridge,
+# the local OpenCode API, and a Cloudflare Quick Tunnel for the bridge.
+set -euo pipefail
+ROOT="$HOME/.codein"
+BIN="$ROOT/bin"
+LOGS="$ROOT/logs"
+STATE="$ROOT/links"
+TUNNEL_LOG="$LOGS/tunnel.log"
+WATCH_LOG="$LOGS/links.log"
+WATCH_PID="$STATE/watch.pid"
+TUNNEL_PID="$STATE/tunnel.pid"
+LINKS_JSON="$ROOT/links.json"
+CONFIG="$ROOT/config.json"
+mkdir -p "$STATE" "$LOGS"
+chmod 700 "$STATE"
+
+if [ ! -f "$CONFIG" ]; then
+  echo "[Codein] Run the Codein Termux installer first." >&2
+  exit 1
+fi
+PORT="$(python - "$CONFIG" <<'PY'
+import json, sys
+from pathlib import Path
+print(int(json.loads(Path(sys.argv[1]).read_text()).get("port", 8765)))
+PY
+)"
+
+tunnel_url() {
+  [ -f "$TUNNEL_LOG" ] || return 1
+  grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | tail -n 1
+}
+
+tunnel_alive() {
+  [ -f "$TUNNEL_PID" ] || return 1
+  local pid
+  pid="$(cat "$TUNNEL_PID" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+bridge_running() {
+  "$BIN/codein-bridge" status 2>/dev/null | grep -q "is running at"
+}
+
+opencode_running() {
+  "$BIN/codein-opencode" status 2>/dev/null | grep -q '"running":true'
+}
+
+ensure_cloudflared() {
+  command -v cloudflared >/dev/null 2>&1 && return 0
+  echo "[Codein] Installing cloudflared..."
+  if pkg install -y cloudflared >/dev/null 2>&1 && command -v cloudflared >/dev/null 2>&1; then
+    return 0
+  fi
+  local arch="arm64" bin="cloudflared-linux-arm64"
+  case "$(uname -m)" in
+    aarch64|arm64) arch="arm64"; bin="cloudflared-linux-arm64" ;;
+    armv7l|armv8l) arch="arm"; bin="cloudflared-linux-arm" ;;
+    x86_64) arch="amd64"; bin="cloudflared-linux-amd64" ;;
+    *) echo "[Codein] Unsupported CPU for cloudflared: $(uname -m)" >&2; return 1 ;;
+  esac
+  local target="$BIN/cloudflared"
+  if [ ! -x "$target" ]; then
+    curl --retry 3 --retry-delay 1 --fail --silent --show-error --location \
+      "https://github.com/cloudflare/cloudflared/releases/latest/download/$bin" -o "$target.tmp"
+    chmod 700 "$target.tmp"
+    mv -f "$target.tmp" "$target"
+  fi
+  echo "[Codein] cloudflared ($arch) ready at $target"
+}
+
+start_tunnel() {
+  if tunnel_alive; then return 0; fi
+  ensure_cloudflared || return 1
+  : > "$TUNNEL_LOG"
+  nohup "$BIN/cloudflared" tunnel --no-autoupdate --url "http://127.0.0.1:$PORT" >>"$TUNNEL_LOG" 2>&1 &
+  echo "$!" > "$TUNNEL_PID"
+  chmod 600 "$TUNNEL_PID"
+  local i
+  for i in $(seq 1 60); do
+    tunnel_url >/dev/null 2>&1 && return 0
+    tunnel_alive || break
+    sleep 0.5
+  done
+  return 1
+}
+
+write_links() {
+  python - "$PORT" "$ROOT/server.pid" "$LINKS_JSON" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+port = int(sys.argv[1]); pidfile = Path(sys.argv[2]); target = Path(sys.argv[3])
+root = Path.home() / ".codein"
+pid = pidfile.read_text().strip() if pidfile.exists() else ""
+links = [{"id": "bridge", "kind": "bridge", "name": "MCP bridge", "url": "http://127.0.0.1:%d" % port, "local": True, "pid": pid}]
+tunnel = ""
+log = root / "logs" / "tunnel.log"
+if log.exists():
+    for line in log.read_text(errors="replace").splitlines()[::-1]:
+        for token in line.split():
+            if token.startswith("https://") and ".trycloudflare.com" in token:
+                tunnel = token.strip().strip('"').rstrip("/")
+                break
+        if tunnel: break
+if tunnel:
+    links.append({"id": "tunnel", "kind": "tunnel", "name": "Cloudflare Quick Tunnel", "url": tunnel, "local": False})
+links.append({"id": "opencode", "kind": "opencode", "name": "OpenCode API", "url": "http://127.0.0.1:4096", "local": True})
+payload = {"updated_at": datetime.now(timezone.utc).isoformat(), "parallel": True, "links": links}
+target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+target.chmod(0o600)
+PY
+}
+
+retry_allowed() {
+  local stamp="$STATE/$1.stamp"
+  [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(cat "$stamp" 2>/dev/null || echo 0) )) -ge 300 ]
+}
+
+mark_retry() { date +%s > "$STATE/$1.stamp"; }
+
+reconcile() {
+  if ! bridge_running; then "$BIN/codein-bridge" start >/dev/null 2>&1 || true; fi
+  if ! opencode_running && retry_allowed opencode; then
+    mark_retry opencode
+    "$BIN/codein-opencode" start >/dev/null 2>&1 || true
+  fi
+  if ! tunnel_alive && retry_allowed tunnel; then
+    mark_retry tunnel
+    start_tunnel || true
+  fi
+  write_links
+}
+
+watch() {
+  while :; do
+    reconcile
+    sleep 10
+  done
+}
+
+start_all() {
+  ensure_cloudflared >/dev/null 2>&1 || true
+  # Bridge and OpenCode boot at the same time, never one after the other.
+  "$BIN/codein-bridge" start >/dev/null 2>&1 &
+  local bridge_job=$!
+  "$BIN/codein-opencode" start >"$LOGS/opencode-start.log" 2>&1 &
+  local opencode_job=$!
+  start_tunnel >/dev/null 2>&1 || true
+  wait "$bridge_job" || true
+  wait "$opencode_job" || true
+  if ! tunnel_alive; then
+    start_tunnel >/dev/null 2>&1 || echo "[Codein] Quick Tunnel is not ready yet; the watchdog will retry." >&2
+  fi
+  write_links
+  if [ -f "$WATCH_PID" ] && kill -0 "$(cat "$WATCH_PID" 2>/dev/null || echo 0)" 2>/dev/null; then
+    :
+  else
+    nohup "$0" watch >>"$WATCH_LOG" 2>&1 &
+    echo "$!" > "$WATCH_PID"
+    chmod 600 "$WATCH_PID"
+  fi
+  python - "$LINKS_JSON" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text())
+for link in data.get("links", []):
+    print("[Codein] %-22s %s" % (link.get("name", link.get("id")), link.get("url")))
+PY
+  echo "[Codein] Quick Tunnel is public but token-protected."
+}
+
+stop_all() {
+  if [ -f "$WATCH_PID" ]; then
+    kill "$(cat "$WATCH_PID" 2>/dev/null || echo 0)" 2>/dev/null || true
+    rm -f "$WATCH_PID"
+  fi
+  if tunnel_alive; then
+    kill "$(cat "$TUNNEL_PID")" 2>/dev/null || true
+  fi
+  rm -f "$TUNNEL_PID"
+  "$BIN/codein-opencode" stop >/dev/null 2>&1 || true
+  rm -f "$LINKS_JSON"
+  echo "[Codein] Parallel links stopped."
+}
+
+case "${1:-status}" in
+  start) start_all ;;
+  stop) stop_all ;;
+  restart) stop_all; start_all ;;
+  status)
+    if [ -f "$LINKS_JSON" ]; then cat "$LINKS_JSON"
+    else echo '{"ok":false,"error":"No links recorded yet. Run: codein-links start"}'; fi
+    ;;
+  watch) watch ;;
+  logs) tail -n 80 "$WATCH_LOG" "$TUNNEL_LOG" 2>/dev/null || echo "[Codein] No link logs yet." ;;
+  *) echo "Usage: codein-links {start|stop|restart|status|watch|logs}" >&2; exit 2 ;;
+esac

@@ -29,6 +29,7 @@ fetch "termux/composio_platform.py" "$ROOT/composio_platform.py"
 fetch "termux/with-key.py" "$ROOT/bin/codein-with-key"
 fetch "termux/codein-bridge" "$ROOT/bin/codein-bridge"
 fetch "termux/codein-opencode" "$ROOT/bin/codein-opencode"
+fetch "termux/codein-links" "$ROOT/bin/codein-links"
 fetch "termux/skills/integrations.md" "$ROOT/skills/integrations.md"
 fetch "termux/skills/github-cloudflare.md" "$ROOT/skills/github-cloudflare.md"
 fetch "termux/skills/telegram.md" "$ROOT/skills/telegram.md"
@@ -41,7 +42,7 @@ fetch "docs/AGENT_SYSTEM_PROMPT.md" "$ROOT/docs/AGENT_SYSTEM_PROMPT.md"
 fetch "termux/LIBRARIES.md" "$ROOT/docs/LIBRARIES.md"
 
 python -m py_compile "$STAGE/termux/server.py" "$STAGE/termux/composio_connect.py" "$STAGE/termux/composio_platform.py" "$STAGE/termux/with-key.py"
-bash -n "$STAGE/termux/codein-bridge" "$STAGE/termux/codein-opencode"
+bash -n "$STAGE/termux/codein-bridge" "$STAGE/termux/codein-opencode" "$STAGE/termux/codein-links"
 while IFS='|' read -r remote target; do
   [ -n "$remote" ] || continue
   mkdir -p "$(dirname "$target")"
@@ -127,8 +128,8 @@ with urlopen(request, timeout=5) as response:
     result = json.load(response).get("result", {})
 version = result.get("serverInfo", {}).get("version", "")
 parts = [int(part) if part.isdigit() else 0 for part in version.split(".")]
-if (parts + [0, 0])[:3] < [1, 3, 0]:
-    raise SystemExit("[Codein] MCP bridge update verification failed; expected version 1.3.0 or newer.")
+if (parts + [0, 0])[:3] < [1, 4, 0]:
+    raise SystemExit("[Codein] MCP bridge update verification failed; expected version 1.4.0 or newer.")
 print("[Codein] MCP bridge verified: version " + version)
 PY
 
@@ -138,12 +139,12 @@ echo "[Codein] Bridge controls: $ROOT/bin/codein-bridge {start|stop|restart|stat
 echo "[Codein] Bridge log: $ROOT/logs/server.log"
 echo "[Codein] Keep Termux open while Codein uses it."
 echo
-echo "[Codein] Preparing OpenCode agent API (no browser UI)..."
-if "$ROOT/bin/codein-opencode" start; then
-  echo "[Codein] OpenCode runtime ready on http://127.0.0.1:4096"
+echo "[Codein] Opening parallel connections (bridge + OpenCode + Quick Tunnel)..."
+if "$ROOT/bin/codein-links" start; then
+  echo "[Codein] Parallel links are up; the watchdog keeps them alive."
 else
-  echo "[Codein] OpenCode runtime could not start. The existing Codein bridge remains available."
-  echo "[Codein] Check: $ROOT/logs/opencode.log"
+  echo "[Codein] Some links are not ready yet. The watchdog retries every 10s."
+  echo "[Codein] Check: $ROOT/bin/codein-links status"
 fi
 
 echo
