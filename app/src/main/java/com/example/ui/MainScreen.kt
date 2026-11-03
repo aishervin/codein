@@ -3230,7 +3230,7 @@ private fun TermuxAgentRoomDialog(
                         }
                     }
                     Button(
-                        enabled = !busy && selectedAiModel.isNotBlank() && (aiKeyValue.isNotBlank() || (aiProviderId == "opencode" && savedKeys.contains("opencode_api_key"))),
+                        enabled = !busy && selectedAiModel.isNotBlank() && (aiKeyValue.isNotBlank() || savedKeys.contains("${aiProviderId}_api_key")),
                         onClick = {
                             busy = true
                             scope.launch {
