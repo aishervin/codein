@@ -2987,7 +2987,7 @@ private fun TermuxAgentRoomDialog(
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                             clipboard.setPrimaryClip(ClipData.newPlainText("Codein Termux install", installCommand))
                             val launched = runCatching {
-                                val intent = packageManager.getLaunchIntentForPackage("com.termux")?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                val intent = context.packageManager.getLaunchIntentForPackage("com.termux")?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 if (intent != null) { context.startActivity(intent); true } else false
                             }.getOrDefault(false)
                             output = "دستور نصب/به‌روزرسانی کپی شد" + if (launched) " و Termux باز شد؛ همان‌جا بچسبان و اجرا کن." else
@@ -2999,7 +2999,8 @@ private fun TermuxAgentRoomDialog(
                     OutlinedButton(
                         onClick = {
                             val url = "https://github.com/aishervin/codein#termux"
-                            if (!openInSystemBrowser(url)) openInAppBrowser(url)
+                            val opened = runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.isSuccess
+                            if (!opened) android.widget.Toast.makeText(context, "مرورگر باز نشد", android.widget.Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.weight(1f)
                     ) { Text("راهنمای نصب", fontSize = 12.sp, maxLines = 1) }
