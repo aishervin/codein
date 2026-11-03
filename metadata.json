@@ -1,0 +1,6 @@
+{
+  "name": "SHΞN™Termutoxic",
+  "description": "AI Agent Manager for Termux - Natural Language Shell Execution, GitHub & Cloudflare Integrations",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
