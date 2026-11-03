@@ -108,6 +108,12 @@ jobs:
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           set -o pipefail
+          bash ./gradlew compileReleaseKotlin --no-daemon --stacktrace --console=plain -PversionName="${{ steps.release.outputs.version_name }}" -PversionCode="${{ steps.release.outputs.version_code }}" -PCOMPOSIO_WORKER_URL="$COMPOSIO_WORKER_URL" 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
+          if grep -q "e: file:" "$RUNNER_TEMP/gradle-build.log"; then
+            echo "KOTLIN ERRORS:"
+            grep -A3 "e: file:" "$RUNNER_TEMP/gradle-build.log" | head -60
+            exit 1
+          fi
           bash ./gradlew assembleRelease --no-daemon --stacktrace --console=plain -PversionName="${{ steps.release.outputs.version_name }}" -PversionCode="${{ steps.release.outputs.version_code }}" -PCOMPOSIO_WORKER_URL="$COMPOSIO_WORKER_URL" 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
 
       - name: Upload Gradle failure log
