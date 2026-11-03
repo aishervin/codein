@@ -227,6 +227,9 @@ private data class DownloadPayload(val name: String, val content: String)
 
 private data class TermuxToolRequest(val command: String, val reason: String)
 
+private const val TERMUX_INSTALL_COMMAND = "pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash"
+private const val TERMUX_INSTALL_HINT = "پل نسخهٔ قبلی است؛ دستور نصب را دوباره در Termux اجرا کن."
+
 private const val TERMUX_TOOL_REQUEST_START = "[[CODEIN_TOOL_REQUEST:v1]]"
 private const val TERMUX_TOOL_REQUEST_END = "[[/CODEIN_TOOL_REQUEST]]"
 
@@ -519,11 +522,11 @@ private fun MainChatScreen(
     LaunchedEffect(termuxConnected) {
         if (!termuxConnected) return@LaunchedEffect
         if (modelPrefs.getString(SELECTED_MODEL_KEY, null) != null) return@LaunchedEffect
-        val free = availableModels.firstOrNull { it.providerId == "opencode" } ?: return@LaunchedEffect
-        selectedModel = free
+        val model = availableModels.firstOrNull { it.providerId == "opencode" } ?: return@LaunchedEffect
+        selectedModel = model
         modelPrefs.edit()
-            .putString(SELECTED_MODEL_KEY, free.id)
-            .putString(SELECTED_PROVIDER_KEY, free.providerId.orEmpty())
+            .putString(SELECTED_MODEL_KEY, model.id)
+            .putString(SELECTED_PROVIDER_KEY, model.providerId.orEmpty())
             .apply()
     }
 
@@ -2891,62 +2894,122 @@ private fun TermuxAgentRoomDialog(
                 }
                 if (selectedRoomTab == 1) {
                 Text("این صفحه فقط وقتی کار می‌کند که پل محلی Codein در Termux اجرا باشد. آدرس پیش‌فرض همین گوشی است؛ معمولاً نیازی به تغییرش نیست.", color = TextMuted, fontSize = 12.sp)
-                OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it }, label = { Text("آدرس پل محلی (پیش‌فرض)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("توکن اتصال محلی") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                Text("توکن را یک‌بار از فایل ~/.codein/config.json داخل Termux بردار. این توکن فقط برای اتصال همین گوشی است؛ آن را در چت یا مخزن کد نفرست.", color = TextMuted, fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(enabled = !busy, onClick = {
-                        busy = true
-                        client.baseUrl = baseUrl
-                        client.bearerToken = token
-                        scope.launch {
-                            runCatching {
-                                val health = client.health()
-                                val room = client.roomContext()
-                                val names = client.credentialNames()
-                                Triple(health, room, names)
-                            }
-                                .onSuccess {
-                                    status = "متصل · MCP ${it.first.optString("version")}"
-                                    savedKeys = it.third
-                                    skillNames = it.second.optJSONObject("skills")?.keys()?.asSequence()?.toList().orEmpty().sorted()
-                                    val events = it.second.optJSONArray("events") ?: JSONArray()
-                                    roomEventLines = (0 until events.length()).mapNotNull { index ->
-                                        events.optJSONObject(index)?.let { event ->
-                                            event.optString("at").take(19) + " · " + event.optString("kind")
-                                        }
-                                    }.takeLast(40)
-                                    onRoomContextLoaded(it.second)
-                                    output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
-                                        "\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" }) +
-                                        "\nSkills: " + skillNames.joinToString().ifBlank { "none installed" }
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it },
+                    label = { Text("آدرس پل محلی") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = token,
+                    onValueChange = { token = it },
+                    label = { Text("توکن اتصال محلی") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        enabled = !busy,
+                        onClick = {
+                            busy = true
+                            client.baseUrl = baseUrl
+                            client.bearerToken = token
+                            scope.launch {
+                                runCatching {
+                                    val health = client.health()
+                                    val room = client.roomContext()
+                                    val names = client.credentialNames()
+                                    Triple(health, room, names)
                                 }
-                                .onFailure { status = "اتصال ناموفق: " + (it.message ?: "خطای نامشخص") }
-                            busy = false
-                        }
-                    }) { Text(if (busy) "در حال اتصال…" else "اتصال") }
-                TextButton(onClick = {
-                        val installCommand = "curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash"
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Codein Termux install", installCommand))
-                        output = "دستور نصب/به‌روزرسانی پل MCP کپی شد. آن را در Termux اجرا کن؛ توکن و کلیدهای ذخیره‌شدهٔ قبلی پاک نمی‌شوند. اگر برنامه دوباره توکن خواست، همان توکن قبلی را وارد کن:\n\n" + installCommand + "\n\nبرای راه‌اندازی مجدد از ~/.codein/bin/codein-links restart استفاده کن؛ این دستور پل، OpenCode و تونل را موازی بالا می‌آورد. نسخهٔ پل بعد از اتصال همین‌جا نمایش داده می‌شود."
-                }) { Text("کپی دستور نصب / به‌روزرسانی پل MCP") }
-                TextButton(enabled = !busy && token.isNotBlank(), onClick = {
-                    busy = true
-                    client.baseUrl = baseUrl
-                    client.bearerToken = token
-                    scope.launch {
-                        runCatching { client.links() }.onSuccess { links ->
-                            linkLines = links.map { link ->
-                                (if (link.optBoolean("reachable")) "● " else "○ ") +
-                                    link.optString("name", link.optString("id")) + " · " + link.optString("url")
+                                    .onSuccess {
+                                        status = "متصل · MCP ${it.first.optString("version")}"
+                                        savedKeys = it.third
+                                        skillNames = it.second.optJSONObject("skills")?.keys()?.asSequence()?.toList().orEmpty().sorted()
+                                        val events = it.second.optJSONArray("events") ?: JSONArray()
+                                        roomEventLines = (0 until events.length()).mapNotNull { index ->
+                                            events.optJSONObject(index)?.let { event ->
+                                                event.optString("at").take(19) + " · " + event.optString("kind")
+                                            }
+                                        }.takeLast(40)
+                                        onRoomContextLoaded(it.second)
+                                        output = "Agent Room loaded · " + it.second.optJSONObject("state")?.optString("workspace", "shared workspace") +
+                                            "\nSaved credentials: " + (it.third.joinToString().ifBlank { "none yet" }) +
+                                            "\nSkills: " + skillNames.joinToString().ifBlank { "none installed" }
+                                    }
+                                    .onFailure { error ->
+                                        val reason = error.message ?: "خطای نامشخص"
+                                        status = "اتصال ناموفق: " + reason
+                                        if (Regex("404|405|Not Found|Unknown endpoint", RegexOption.IGNORE_CASE).containsMatchIn(reason)) {
+                                            output = TERMUX_INSTALL_HINT
+                                        }
+                                    }
+                                busy = false
                             }
-                            if (linkLines.isEmpty()) status = "هیچ اتصال موازی ثبت نشده؛ در Termux دستور ~/.codein/bin/codein-links start را اجرا کن."
-                        }.onFailure { status = "بررسی اتصالات موازی ناموفق: " + (it.message ?: "خطای نامشخص") }
-                        busy = false
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text(if (busy) "در حال اتصال…" else "اتصال") }
+                    OutlinedButton(
+                        enabled = !busy && token.isNotBlank(),
+                        onClick = {
+                            busy = true
+                            client.baseUrl = baseUrl
+                            client.bearerToken = token
+                            scope.launch {
+                                runCatching { client.links() }.onSuccess { links ->
+                                    linkLines = links.map { link ->
+                                        (if (link.optBoolean("reachable")) "● " else "○ ") +
+                                            link.optString("name", link.optString("id")) + " · " + link.optString("url")
+                                    }
+                                    if (linkLines.isEmpty()) status = "هیچ اتصال موازی ثبت نشده؛ در Termux دستور ~/.codein/bin/codein-links start را اجرا کن."
+                                }.onFailure { status = "بررسی اتصالات موازی ناموفق: " + (it.message ?: "خطای نامشخص") }
+                                busy = false
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("بررسی اتصالات", fontSize = 12.sp, maxLines = 1) }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = {
+                            val installCommand = TERMUX_INSTALL_COMMAND
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Codein Termux install", installCommand))
+                            val launched = runCatching {
+                                val intent = packageManager.getLaunchIntentForPackage("com.termux")?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                if (intent != null) { context.startActivity(intent); true } else false
+                            }.getOrDefault(false)
+                            output = "دستور نصب/به‌روزرسانی کپی شد" + if (launched) " و Termux باز شد؛ همان‌جا بچسبان و اجرا کن." else
+                                ". Termux نصب نیست یا باز نشد؛ خودت آن را باز کن و بچسبان:\n\n" + installCommand +
+                                "\n\nبرای راه‌اندازی مجدد: ~/.codein/bin/codein-links restart"
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("کپی + باز کردن Termux", fontSize = 12.sp, maxLines = 1) }
+                    OutlinedButton(
+                        onClick = {
+                            val url = "https://github.com/aishervin/codein#termux"
+                            if (!openInSystemBrowser(url)) openInAppBrowser(url)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("راهنمای نصب", fontSize = 12.sp, maxLines = 1) }
+                }
+                Text("توکن را یک‌بار از فایل ~/.codein/config.json داخل Termux بردار. این توکن فقط برای اتصال همین گوشی است؛ آن را در چت یا مخزن کد نفرست.", color = TextMuted, fontSize = 11.sp)
+                if (linkLines.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.fillMaxWidth()) {
+                        linkLines.forEach { line -> Text(line, fontSize = 10.sp, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     }
-                }) { Text("بررسی اتصالات موازی (پل + تونل + OpenCode)") }
-                linkLines.forEach { Text(it, fontSize = 10.sp, color = TextMuted) }
+                }
                 }
                 Spacer(Modifier.height(8.dp))
                 Text("گزارش رویدادهای اخیر", color = NeonOrangeSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -3081,19 +3144,24 @@ private fun TermuxAgentRoomDialog(
                 OutlinedTextField(
                     value = aiKeyValue,
                     onValueChange = { aiKeyValue = it; aiModels = emptyList(); selectedAiModel = "" },
-                    label = { Text(if (aiProviderId == "opencode") "کلید OpenCode (اختیاری)" else "API key سرویس انتخاب‌شده") },
+                    label = { Text(if (aiProviderId == "opencode") "کلید رایگان OpenCode" else "API key سرویس انتخاب‌شده") },
                     singleLine = true,
                     enabled = !busy,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    if (aiProviderId == "opencode") "مدل‌های رایگان OpenCode بدون کلید کار می‌کنند؛ کلید رایگان از opencode.ai/auth فقط سهمیهٔ روزانه را بیشتر می‌کند."
+                    if (aiProviderId == "opencode") "برای مدل‌های رایگان OpenCode یک کلید رایگان لازم است؛ بدون کلید سرور 403 یا 429 برمی‌گرداند. کلید را یک‌بار از opencode.ai/auth بگیر و ذخیره کن."
                     else "برای هر مدل یک درخواست واقعی کوتاه فرستاده می‌شود؛ سرویس ممکن است هزینهٔ API بگیرد.",
-                    color = if (aiProviderId == "opencode") Color(0xFF4DDB8A) else NeonOrangeSoft, fontSize = 10.sp
+                    color = if (aiProviderId == "opencode") NeonOrangeSoft else TextMuted, fontSize = 10.sp
                 )
+                if (aiProviderId == "opencode") {
+                    TextButton(onClick = { openInSystemBrowser("https://opencode.ai/auth") }) {
+                        Text("دریافت کلید رایگان OpenCode", color = NeonOrangeSoft, fontSize = 12.sp)
+                    }
+                }
                 Button(
-                    enabled = !busy && token.isNotBlank() && (aiKeyValue.isNotBlank() || aiProviderId == "opencode"),
+                    enabled = !busy && token.isNotBlank() && aiKeyValue.isNotBlank(),
                     onClick = {
                         busy = true
                         aiModelMenuExpanded = false
@@ -3114,9 +3182,9 @@ private fun TermuxAgentRoomDialog(
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "در حال استعلام و آزمون…" else if (aiProviderId == "opencode" && aiKeyValue.isBlank()) "آزمون مدل‌های رایگان (بدون کلید)" else "استعلام و آزمون با کلید واردشده") }
+                ) { Text(if (busy) "در حال استعلام و آزمون…" else "استعلام و آزمون با کلید واردشده") }
                 OutlinedButton(
-                    enabled = !busy && token.isNotBlank() && (savedKeys.contains("${aiProviderId}_api_key") || aiProviderId == "opencode"),
+                    enabled = !busy && token.isNotBlank() && savedKeys.contains("${aiProviderId}_api_key"),
                     onClick = {
                         busy = true
                         aiModelMenuExpanded = false
@@ -3140,7 +3208,7 @@ private fun TermuxAgentRoomDialog(
                 if (savedKeys.contains("${aiProviderId}_api_key")) {
                     Text("کلید این سرویس قبلاً ذخیره شده؛ لازم نیست دوباره واردش کنی.", color = Color(0xFF4DDB8A), fontSize = 11.sp)
                 } else if (aiProviderId == "opencode") {
-                    Text("این سرویس بدون کلید هم کار می‌کند. دو مدل رایگان پیش‌فرض همین‌جا آماده‌اند.", color = Color(0xFF4DDB8A), fontSize = 11.sp)
+                    Text("کلید رایگان OpenCode را وارد و یک‌بار ذخیره کن؛ بعد از آن مدل‌های رایگان کار می‌کنند.", color = NeonOrangeSoft, fontSize = 11.sp)
                 } else {
                     Text("برای اولین اتصال، کلید را وارد و یک‌بار ذخیره کن.", color = TextMuted, fontSize = 11.sp)
                 }
@@ -3161,7 +3229,7 @@ private fun TermuxAgentRoomDialog(
                         }
                     }
                     Button(
-                        enabled = !busy && selectedAiModel.isNotBlank() && (aiKeyValue.isNotBlank() || aiProviderId == "opencode"),
+                        enabled = !busy && selectedAiModel.isNotBlank() && (aiKeyValue.isNotBlank() || (aiProviderId == "opencode" && savedKeys.contains("opencode_api_key"))),
                         onClick = {
                             busy = true
                             scope.launch {

@@ -12,7 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
-SERVER_VERSION="1.5.0"
+SERVER_VERSION="1.5.1"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -115,10 +115,12 @@ PROVIDERS = {
     "mistral": {"name":"Mistral","key":"mistral_api_key","base_url":"https://api.mistral.ai/v1","default_model":"","kind":"openai","models":[]},
     "xai": {"name":"xAI Grok","key":"xai_api_key","base_url":"https://api.x.ai/v1","default_model":"","kind":"openai","models":[]},
     "groq": {"name":"Groq","key":"groq_api_key","base_url":"https://api.groq.com/openai/v1","default_model":"","kind":"openai","models":[]},
-    # OpenCode Zen exposes a free OpenAI-compatible tier. A key is optional: free models work
-    # without one, and a free key raises the quota. Two light free models are the defaults.
-    "opencode": {"name":"OpenCode Free","key":"opencode_api_key","base_url":"https://opencode.ai/inference/openai/v1","default_model":"mimo-v2.6-flash-free","kind":"openai","key_optional":True,
-                 "models":["mimo-v2.6-flash-free","ling-3.1-flash-free"]},
+    # OpenCode Zen exposes a free OpenAI-compatible tier. A free key from opencode.ai/auth is
+    # required: without one the endpoint answers 429 (quota) or 403 (Cloudflare block).
+    # Two light free models are the defaults.
+    "opencode": {"name":"OpenCode Free","key":"opencode_api_key","base_url":"https://opencode.ai/inference/openai/v1","default_model":"mimo-v2.6-flash-free","kind":"openai",
+                 "models":["mimo-v2.6-flash-free","ling-3.1-flash-free"],
+                 "key_url":"https://opencode.ai/auth","key_hint":"Create a free OpenCode key at opencode.ai/auth, then save it here once. Free models answer 403/429 without it."},
 }
 
 def provider_catalog():
@@ -128,6 +130,8 @@ def provider_catalog():
         catalog.append({"id":pid,"name":item["name"],"base_url":item["base_url"],
             "default_model":item["default_model"],"models":list(item.get("models") or []),
             "key_optional":optional,
+            "key_url":item.get("key_url",""),
+            "key_hint":item.get("key_hint",""),
             "configured":optional or (KEYS/(item["key"]+".json")).is_file(),
             "credential_name":item["key"]})
     return catalog
@@ -804,7 +808,12 @@ def provider_chat(data, emit=None, cancel=None):
             if isinstance(provider_error,dict): detail=str(provider_error.get("message") or provider_error.get("status") or raw_detail)
         except (TypeError,ValueError): pass
         event("provider_chat_error",{"provider":pid,"model":model,"status":exc.code})
-        error="Provider is temporarily busy (HTTP "+str(exc.code)+")" if exc.code in (429,503) else "Provider HTTP "+str(exc.code)
+        if exc.code==403 and provider.get("key_url"):
+            error="Provider refused the keyless free tier (HTTP 403). Save a free key from "+str(provider["key_url"])+" in Integrations, then retry."
+        elif exc.code==429 and provider.get("key_url"):
+            error="Free quota for this model is used up (HTTP 429). Save a free key from "+str(provider["key_url"])+" or pick another model."
+        else:
+            error="Provider is temporarily busy (HTTP "+str(exc.code)+")" if exc.code in (429,503) else "Provider HTTP "+str(exc.code)
         return 502,{"ok":False,"error":error,"provider":pid,"model":model,"detail":detail[:3000]}
     except (URLError,TimeoutError):
         if cancel and cancel.cancelled.is_set(): return 499,{"ok":False,"error":"Request cancelled"}

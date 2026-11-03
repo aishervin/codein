@@ -44,7 +44,7 @@ The Quick Tunnel URL is public but every request still needs the pairing bearer 
 
 ## Free default models
 
-The provider `opencode` uses the OpenCode Zen OpenAI-compatible endpoint and needs no API key for its free tier. Codein defaults to two light free models, `mimo-v2.6-flash-free` and `ling-3.1-flash-free`; both support tool calls, so the agent loop still works. A free key from `https://opencode.ai/auth` is optional and only raises the daily quota.
+The provider `opencode` uses the OpenCode Zen OpenAI-compatible endpoint. Its free models need a free key from `https://opencode.ai/auth`: without one the endpoint answers HTTP 403 (Cloudflare block) or 429 (quota), which is what Codein reports. Save the key once in the app and the two default models, `mimo-v2.6-flash-free` and `ling-3.1-flash-free`, work with tool calls.
 
 ## In-app Codein Browser
 
