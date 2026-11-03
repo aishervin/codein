@@ -221,7 +221,7 @@ internal fun TermuxPermissionPanel(
         Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text("⌑  اجازه اجرای فرمان", color = NeonOrangeSoft, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Text(
-                "این فرمان قبل از اجرا نیاز به تأیید تو دارد. فقط اگر دستور را می‌شناسی اجازه بده.",
+                "این فرمان قبل از اجرا نیاز به تأیید تو دارد. بعد از تأیید، مدل خودش نتیجه را می‌خواند و کار را ادامه می‌دهد؛ تأیید دوباره لازم نیست.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 lineHeight = 16.sp

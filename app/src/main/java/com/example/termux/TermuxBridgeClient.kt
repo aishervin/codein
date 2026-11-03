@@ -148,6 +148,16 @@ class TermuxBridgeClient(context: Context) {
         return mcpTool("provider_model_test", arguments, 45)
     }
 
+    /** Resume a provider turn that paused for command approval; returns the final answer. */
+    suspend fun resumeChat(continuationId: String, decision: String, always: Boolean = false): JSONObject {
+        require(continuationId.isNotBlank()) { "Missing approval continuation" }
+        require(decision in setOf("approve", "deny")) { "Invalid approval decision" }
+        return mcpTool("provider_chat_resume", JSONObject()
+            .put("continuation_id", continuationId)
+            .put("decision", decision)
+            .put("always", always), 300)
+    }
+
     /** Run provider chat through the local MCP server; its tool loop dispatches native MCP tools. */
     suspend fun chat(provider: String, model: String, messages: JSONArray, system: String): JSONObject {
         val result = mcpTool("provider_chat", JSONObject()

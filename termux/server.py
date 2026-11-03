@@ -12,7 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
-SERVER_VERSION="1.4.0"
+SERVER_VERSION="1.5.0"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -25,6 +25,19 @@ class RequestCancelled(Exception): pass
 ACTIVE_STREAMS={}
 PENDING_CANCELLATIONS={}
 ACTIVE_STREAMS_LOCK=threading.Lock()
+PENDING_CHATS={}
+PENDING_CHATS_LOCK=threading.Lock()
+
+def stash_pending_chat(pid, model, system, kind, native, call, timeout):
+    """Remember an interrupted provider turn so one approval resumes it."""
+    continuation_id=uuid.uuid4().hex
+    with PENDING_CHATS_LOCK:
+        cutoff=time.time()-1800
+        for key in [key for key,value in list(PENDING_CHATS.items()) if value.get("at",0)<cutoff]:
+            PENDING_CHATS.pop(key,None)
+        PENDING_CHATS[continuation_id]={"pid":pid,"model":model,"system":system,"kind":kind,
+            "native":native,"call":call,"timeout":timeout,"at":time.time()}
+    return continuation_id
 
 class StreamControl:
     def __init__(self):
@@ -210,6 +223,7 @@ def mcp_tools_catalog():
         {"name":"provider_models_list","description":"Query a supported provider's live model catalog with a user-supplied API key. This does not store or log the key.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"api_key":{"type":"string"}},"required":["provider","api_key"]}},
         {"name":"provider_models_saved_list","description":"Query a provider model catalog using the API key already saved in the local credential vault.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)}},"required":["provider"]}},
         {"name":"provider_model_test","description":"Send one short text-generation probe to a single provider model. The optional test key is used only for this request and is never saved. This probe has no local tools.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"test_api_key":{"type":"string"}},"required":["provider","model"]}},
+        {"name":"provider_chat_resume","description":"Resume a provider chat that paused for command approval: execute or deny the pending call, then continue the same turn to its final answer.","inputSchema":{"type":"object","properties":{"continuation_id":{"type":"string"},"decision":{"type":"string","enum":["approve","deny"]},"always":{"type":"boolean"}},"required":["continuation_id"]}},
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
         {"name":"opencode_manage","description":"Manage the optional local OpenCode API: install/start, check status, restart, or stop. This does not replace the selected Codein chat provider.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","start","status","restart","stop"]}},"required":["action"]}}
     ]
@@ -368,6 +382,38 @@ def dispatch_mcp_tool(name, args):
         if status!=200 or not result.get("ok") or marker not in answer:
             raise RuntimeError("Model did not pass the live text-response test")
         return {"ok":True,"verified":True,"provider":pid,"model":model}
+    if name=="provider_chat_resume":
+        cid=str(args.get("continuation_id","")).strip()
+        with PENDING_CHATS_LOCK:
+            state=PENDING_CHATS.pop(cid,None)
+        if not state:
+            raise RuntimeError("This approval request expired or was already used. Send the request again.")
+        decision=str(args.get("decision","approve")).strip().lower()
+        pending=state.get("call") or {}
+        pending_name=str(pending.get("name",""))
+        pending_args=dict(pending.get("args") or {})
+        if decision=="deny":
+            result={"ok":False,"denied":True,"error":"The user denied this command. Nothing was executed."}
+        else:
+            if pending_name=="termux_exec":
+                command=str(pending_args.get("command","")).strip()
+                if command:
+                    try: dispatch_mcp_tool("termux_command_approve",{"command":command,"always":bool(args.get("always",False))})
+                    except Exception: pass
+            try: result=dispatch_mcp_tool(pending_name,pending_args)
+            except Exception as exc: result={"error":str(exc)[:1500]}
+        status,res=provider_chat({
+            "provider":state["pid"],
+            "model":state["model"],
+            "system":state.get("system",""),
+            "messages":[{"role":"user","content":"Continue the task to a final answer."}],
+            "timeout":state.get("timeout",120),
+            "resume":{"native":state.get("native") or [],"call":pending,"result":result},
+        })
+        if status!=200 or not res.get("ok"): return res
+        res["tool_result"]=result
+        res["continuation_id"]=cid
+        return res
     if name=="provider_chat":
         status,result=provider_chat(args)
         return result
@@ -572,8 +618,9 @@ def provider_chat(data, emit=None, cancel=None):
     timeout=max(10,min(int(data.get("timeout",120)),180))
     deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",300)),300)) if emit else None
     model_probe=bool(data.get("model_probe"))
+    resume=data.get("resume") if isinstance(data.get("resume"),dict) else None
     # Probes must not expose action tools or let a model trigger local side effects.
-    tool_catalog=[] if model_probe else [tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_models_list","provider_models_saved_list","provider_model_test","credential_save","termux_command_approve","opencode_manage","composio_platform_configure")]
+    tool_catalog=[] if model_probe else [tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_chat_resume","provider_models_list","provider_models_saved_list","provider_model_test","credential_save","termux_command_approve","opencode_manage","composio_platform_configure")]
     try:
         if cancel: cancel.check()
         if provider["kind"]=="gemini":
@@ -581,6 +628,10 @@ def provider_chat(data, emit=None, cancel=None):
             for item in clean:
                 if item["role"]=="system": system += "\n"+item["content"]; continue
                 contents.append({"role":"model" if item["role"]=="assistant" else "user","parts":[{"text":item["content"]}]})
+            if resume:
+                contents=list(resume.get("native") or contents)
+                pending_call=resume.get("call") or {}
+                contents.append({"role":"user","parts":[{"functionResponse":{"name":str(pending_call.get("name","termux_exec")),"response":{"result":resume.get("result") or {}}}}]})
             function_declarations=[{"name":tool["name"],"description":tool["description"],"parameters":gemini_schema(tool.get("inputSchema"))} for tool in tool_catalog]
             method=":streamGenerateContent?alt=sse&key=" if emit else ":generateContent?key="
             url=provider["base_url"]+"/models/"+quote(model,safe="")+method+quote(api_key,safe="")
@@ -621,7 +672,8 @@ def provider_chat(data, emit=None, cancel=None):
                     except Exception as exc: tool_result={"error":str(exc)[:1500]}
                     if isinstance(tool_result,dict) and tool_result.get("permission_required"):
                         if emit: emit({"type":"approval_required","command":str(tool_result.get("command",""))})
-                        return 200,{"ok":True,"permission_required":True,"command":str(tool_result.get("command",""))}
+                        continuation=stash_pending_chat(pid,model,system,provider["kind"],contents,{"id":"","name":tool_name,"args":arguments},timeout)
+                        return 200,{"ok":True,"permission_required":True,"command":str(tool_result.get("command","")),"continuation_id":continuation,"provider":pid,"model":model}
                     if emit: emit({"type":"tool_result","name":tool_name,"summary":"Tool returned an error" if isinstance(tool_result,dict) and tool_result.get("error") else "Tool completed"})
                     tool_responses.append({"functionResponse":{"name":tool_name,"response":{"result":tool_result}}})
                 contents.append({"role":"user","parts":tool_responses})
@@ -631,6 +683,10 @@ def provider_chat(data, emit=None, cancel=None):
             for item in clean:
                 if item["role"]=="system": system_parts.append(item["content"])
             msgs=[{"role":"assistant" if item["role"]=="assistant" else "user","content":item["content"]} for item in clean if item["role"]!="system"]
+            if resume:
+                msgs=list(resume.get("native") or msgs)
+                pending_call=resume.get("call") or {}
+                msgs.append({"role":"user","content":[{"type":"tool_result","tool_use_id":str(pending_call.get("id","")),"content":json.dumps(resume.get("result") or {},ensure_ascii=False)}]})
             tools=[{"name":tool["name"],"description":tool["description"],"input_schema":tool["inputSchema"]} for tool in tool_catalog]
             url=provider["base_url"]+"/messages"
             headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"}
@@ -664,7 +720,8 @@ def provider_chat(data, emit=None, cancel=None):
                     except Exception as exc: result={"error":str(exc)[:1500]}
                     if isinstance(result,dict) and result.get("permission_required"):
                         if emit: emit({"type":"approval_required","command":str(result.get("command",""))})
-                        return 200,{"ok":True,"permission_required":True,"command":str(result.get("command",""))}
+                        continuation=stash_pending_chat(pid,model,system,provider["kind"],msgs,{"id":str(call.get("id","")),"name":str(call.get("name","")),"args":call.get("input") or {}},timeout)
+                        return 200,{"ok":True,"permission_required":True,"command":str(result.get("command","")),"continuation_id":continuation,"provider":pid,"model":model}
                     if emit: emit({"type":"tool_result","id":str(call.get("id","")),"name":str(call.get("name","")),"summary":"Tool returned an error" if isinstance(result,dict) and result.get("error") else "Tool completed"})
                     results.append({"type":"tool_result","tool_use_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
                 msgs.append({"role":"user","content":results})
@@ -673,6 +730,10 @@ def provider_chat(data, emit=None, cancel=None):
             msgs=[]
             if system: msgs.append({"role":"system","content":system})
             msgs.extend(item for item in clean if item["role"]!="system")
+            if resume:
+                msgs=list(resume.get("native") or msgs)
+                pending_call=resume.get("call") or {}
+                msgs.append({"role":"tool","tool_call_id":str(pending_call.get("id","")),"content":json.dumps(resume.get("result") or {},ensure_ascii=False)})
             tools=[{"type":"function","function":{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]}} for tool in tool_catalog]
             url=provider["base_url"].rstrip("/")+"/chat/completions"
             headers={"Content-Type":"application/json"}
@@ -714,7 +775,8 @@ def provider_chat(data, emit=None, cancel=None):
                     except Exception as exc: result={"error":str(exc)[:1500]}
                     if isinstance(result,dict) and result.get("permission_required"):
                         if emit: emit({"type":"approval_required","command":str(result.get("command",""))})
-                        return 200,{"ok":True,"permission_required":True,"command":str(result.get("command",""))}
+                        continuation=stash_pending_chat(pid,model,system,provider["kind"],msgs,{"id":str(call.get("id","")),"name":name,"args":arguments},timeout)
+                        return 200,{"ok":True,"permission_required":True,"command":str(result.get("command","")),"continuation_id":continuation,"provider":pid,"model":model}
                     if emit:
                         if isinstance(result,dict) and "exit_code" in result:
                             summary="Command finished with exit code "+str(result.get("exit_code"))

@@ -38,6 +38,10 @@ A watchdog checks every 10 seconds and restarts whatever died, so both direction
 
 The Quick Tunnel URL is public but every request still needs the pairing bearer token; the bridge itself keeps listening on loopback only. In the app, the Termux tab can probe the links and shows which ones answer.
 
+## One approval, then the model continues
+
+`termux_exec` pauses the provider turn and stores it under a `continuation_id`. The app shows the command sheet once; approving (or denying) calls `provider_chat_resume`, which runs the pending call and continues the same model turn to its final answer. There is no second confirmation and no synthetic "what happened?" message, so the model always reads the command output.
+
 ## Free default models
 
 The provider `opencode` uses the OpenCode Zen OpenAI-compatible endpoint and needs no API key for its free tier. Codein defaults to two light free models, `mimo-v2.6-flash-free` and `ling-3.1-flash-free`; both support tool calls, so the agent loop still works. A free key from `https://opencode.ai/auth` is optional and only raises the daily quota.
