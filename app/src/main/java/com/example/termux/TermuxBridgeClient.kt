@@ -48,11 +48,11 @@ class TermuxBridgeClient(context: Context) {
         val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_model_test", "provider_chat", "composio_platform_configure", "composio_tools_refresh")
         val missing = requiredTools - toolNames
         check(missing.isEmpty()) {
-            "پل MCP ترموکس قدیمی است (ابزارهای لازم را ندارد). از تب سرویس‌ها دستور به‌روزرسانی را کپی و در Termux اجرا کن."
+            "پل MCP ترموکس قدیمی است (ابزارهای لازم را ندارد). از تنظیمات، تب اتصال Termux، دستور نصب/به‌روزرسانی را کپی و در Termux اجرا کن."
         }
         val serverVersion = init.optJSONObject("serverInfo")?.optString("version").orEmpty()
         check(versionAtLeast(serverVersion, "1.3.0")) {
-            "نسخهٔ پل MCP ترموکس قدیمی است ($serverVersion). در تب سرویس‌ها دستور به‌روزرسانی را کپی و در Termux اجرا کن؛ کلیدها و توکن قبلی حفظ می‌شوند."
+            "نسخهٔ پل MCP ترموکس قدیمی است ($serverVersion). از تنظیمات، تب اتصال Termux، دستور نصب/به‌روزرسانی را کپی و در Termux اجرا کن؛ کلیدها و توکن قبلی حفظ می‌شوند."
         }
         return JSONObject()
             .put("ok", true)

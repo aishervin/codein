@@ -51,10 +51,9 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.theme.NeonOrange
 
-private const val TERMUX_SETUP_COMMAND = "pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash"
 private const val TERMUX_UPDATE_COMMAND = "~/.codein/bin/codein-links restart"
 
-/** Termux setup is run by the user, so these rows only copy a command; they never switch apps. */
+/** The local bridge update command is copied for the user to run in Termux. */
 private fun copyTermuxCommand(context: android.content.Context, title: String, command: String) {
     val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
     clipboard?.setPrimaryClip(android.content.ClipData.newPlainText(title, command))
@@ -77,6 +76,7 @@ fun CodeinSettingsSheet(
     termuxConnected: Boolean,
     onOpenHistory: () -> Unit,
     onOpenModels: () -> Unit,
+    onOpenTermux: () -> Unit,
     onOpenIntegrations: () -> Unit,
     onOpenToolTokens: () -> Unit,
     onOpenPatches: () -> Unit,
@@ -118,8 +118,8 @@ fun CodeinSettingsSheet(
                 SettingRow(
                     icon = painterResource(R.drawable.ic_termux),
                     title = "اتصال Termux",
-                    subtitle = if (termuxConnected) "پل MCP متصل است · localhost:8765" else "دستور راه‌اندازی پل ارتباطی محلی را کپی کن",
-                    onClick = { copyTermuxCommand(context, "Codein Termux setup", TERMUX_SETUP_COMMAND) }
+                    subtitle = if (termuxConnected) "پل MCP متصل است · مشاهده یا تنظیم اتصال" else "تنظیم آدرس و توکن اتصال پل محلی",
+                    onClick = onOpenTermux
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
                 SettingRow(
