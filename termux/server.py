@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Codein local Termux bridge. Python standard library only."""
-import hashlib, json, os, random, re, shutil, signal, subprocess, threading, time, uuid
+import hashlib, json, os, random, re, signal, subprocess, tempfile, threading, time, uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,7 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
-SERVER_VERSION="1.7.0"
+SERVER_VERSION="1.8.0"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -21,6 +21,54 @@ KEYS=ROOT/"keys"; EVENTS=ROOT/"events"; SESSIONS=ROOT/"sessions"; PERMISSIONS=RO
 for d in (WORKSPACE,KEYS,EVENTS,SESSIONS,PERMISSIONS,ROOT/"agents",ROOT/"skills",ROOT/"tools",ROOT/"logs"): d.mkdir(parents=True,exist_ok=True)
 
 class RequestCancelled(Exception): pass
+
+def terminate_process_group(proc,grace=2):
+    try: os.killpg(proc.pid,signal.SIGTERM)
+    except (ProcessLookupError,PermissionError):
+        try: proc.terminate()
+        except ProcessLookupError: pass
+    try: proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired: pass
+    try: os.killpg(proc.pid,signal.SIGKILL)
+    except (ProcessLookupError,PermissionError):
+        if proc.poll() is None:
+            try: proc.kill()
+            except ProcessLookupError: pass
+    try: proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        proc.kill(); proc.wait()
+
+def process_group_matches_run(pgid,run_id):
+    marker=b"CODEIN_RUN_ID="+str(run_id).encode("ascii",errors="ignore")
+    try: processes=Path("/proc").iterdir()
+    except OSError: return False
+    for process in processes:
+        if not process.name.isdigit(): continue
+        try:
+            stat=(process/"stat").read_text(encoding="utf-8")
+            fields=stat[stat.rfind(")")+1:].split()
+            if len(fields)<3 or int(fields[2])!=pgid: continue
+            if marker in (process/"environ").read_bytes().split(b"\0"): return True
+        except (OSError,ValueError): continue
+    return False
+
+def terminate_recorded_process_group(pgid,run_id):
+    try: pgid=int(pgid)
+    except (TypeError,ValueError): return False
+    if pgid<=1 or pgid in (os.getpid(),os.getpgrp()): return False
+    try: os.killpg(pgid,0)
+    except ProcessLookupError: return True
+    except PermissionError: return False
+    if not process_group_matches_run(pgid,run_id): return False
+    try: os.killpg(pgid,signal.SIGTERM)
+    except ProcessLookupError: return True
+    deadline=time.monotonic()+0.5
+    while time.monotonic()<deadline:
+        if not process_group_matches_run(pgid,run_id): return True
+        time.sleep(0.05)
+    try: os.killpg(pgid,signal.SIGKILL)
+    except ProcessLookupError: return True
+    return not process_group_matches_run(pgid,run_id)
 
 ACTIVE_STREAMS={}
 PENDING_CANCELLATIONS={}
@@ -35,6 +83,8 @@ PENDING_ROOT.mkdir(parents=True,exist_ok=True)
 RUNS_ROOT.chmod(0o700)
 PENDING_ROOT.chmod(0o700)
 RUNS_LOCK=threading.RLock()
+PERMISSIONS_LOCK=threading.RLock()
+MAX_COMMAND_LOG_BYTES=200000
 RUN_CONTROLS={}
 RUN_PROCESSES={}
 RUN_THREAD_CONTEXT=threading.local()
@@ -259,6 +309,7 @@ def mcp_tools_catalog():
         {"name":"composio_tools_refresh","description":"Discover Composio session tools for this installation's private user identity.","inputSchema":{"type":"object","properties":{}}},
         {"name":"composio_service_link","description":"Generate a Composio connection redirect URL for a service/toolkit.","inputSchema":{"type":"object","properties":{"toolkit":{"type":"string","description":"Toolkit slug (e.g. github, slack)"}},"required":["toolkit"]}},
         {"name":"termux_exec","description":"Run a shell command as the Termux user in the shared Codein workspace. This tool requires explicit user approval for each command.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run"},"timeout":{"type":"integer","minimum":1,"maximum":900,"default":120}},"required":["command"]}},
+        {"name":"read_log","description":"Read a redacted, size-limited log from a completed Termux command.","inputSchema":{"type":"object","properties":{"log_id":{"type":"string","pattern":"^[a-f0-9]{32}$"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":20000}},"required":["log_id"]}},
         {"name":"termux_command_approve","description":"Record user approval for the exact shell command shown in the app permission prompt. Do not call unless the user explicitly approved it.","inputSchema":{"type":"object","properties":{"command":{"type":"string","description":"Exact command approved by the user"},"always":{"type":"boolean","default":False,"description":"Persist approval for this exact command string"}},"required":["command"]}},
         {"name":"agent_room_get","description":"Read shared Agent Room context, workspace state, recent events, sessions and skills. Only credential names are included; never return secret values.","inputSchema":{"type":"object","properties":{}}},
         {"name":"credentials_list","description":"List names of saved local credentials without exposing credential values.","inputSchema":{"type":"object","properties":{}}},
@@ -270,7 +321,7 @@ def mcp_tools_catalog():
         {"name":"provider_models_saved_list","description":"Query a provider model catalog using the API key already saved in the local credential vault.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)}},"required":["provider"]}},
         {"name":"provider_model_test","description":"Send one short text-generation probe to a single provider model. The optional test key is used only for this request and is never saved. This probe has no local tools.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"test_api_key":{"type":"string"}},"required":["provider","model"]}},
         {"name":"provider_chat_resume","description":"Resume a provider chat that paused for command approval: execute or deny the pending call, then continue the same turn to its final answer.","inputSchema":{"type":"object","properties":{"continuation_id":{"type":"string"},"decision":{"type":"string","enum":["approve","deny"]},"always":{"type":"boolean"}},"required":["continuation_id"]}},
-        {"name":"run_start","description":"Start a durable background agent run that survives client disconnects.","inputSchema":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object"}},"system":{"type":"string"},"timeout":{"type":"integer"},"total_timeout":{"type":"integer"},"max_turns":{"type":"integer"}},"required":["provider","model","messages"]}},
+        {"name":"run_start","description":"Start a durable background agent run that survives client disconnects. Reuse idempotency_key when retrying the same start request.","inputSchema":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object"}},"system":{"type":"string"},"timeout":{"type":"integer"},"total_timeout":{"type":"integer"},"max_turns":{"type":"integer"},"idempotency_key":{"type":"string","maxLength":128}},"required":["provider","model","messages"]}},
         {"name":"run_subscribe","description":"Read durable run events after a sequence number; use SSE and Last-Event-ID to reconnect.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"},"after_seq":{"type":"integer"}},"required":["run_id"]}},
         {"name":"run_status","description":"Read durable run state.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}},
         {"name":"run_cancel","description":"Explicitly cancel a durable background run.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}},
@@ -324,80 +375,154 @@ def dispatch_mcp_tool(name, args):
         result=composio_connect.call_tool(key,name[len("composio__"):],args)
         event("composio_tool_called",{"tool":name})
         return result
+    if name=="read_log":
+        log_id=str(args.get("log_id",""))
+        if not re.fullmatch(r"[a-f0-9]{32}",log_id): raise ValueError("Invalid log_id")
+        path=ROOT/"logs"/"commands"/(log_id+".log")
+        if not path.is_file(): return {"ok":False,"error":"Command log not found"}
+        text=path.read_text(encoding="utf-8"); offset=max(0,int(args.get("offset",0)))
+        limit=max(1,min(int(args.get("limit",12000)),20000)); content=text[offset:offset+limit]
+        next_offset=offset+len(content)
+        return {"ok":True,"log_id":log_id,"offset":offset,"content":content,"next_offset":next_offset,"eof":next_offset>=len(text)}
     if name=="termux_command_approve":
         command=str(args.get("command","")).strip()
         if not command: raise ValueError("Command is empty")
-        if bool(args.get("always",False)):
-            policy_path=PERMISSIONS/"always.json"
-            policy=readj(policy_path,{"commands":[]})
-            commands=set(str(item) for item in policy.get("commands",[]) if isinstance(item,str))
-            commands.add(command)
-            policy_path.write_text(json.dumps({"commands":sorted(commands),"updated_at":now()},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-            policy_path.chmod(0o600)
-            event("command_always_allowed",{"command":command[:500]})
-            return {"ok":True,"approved_always":True}
-        approval=PERMISSIONS/(hashlib.sha256(command.encode("utf-8")).hexdigest()+".json")
-        approval.write_text(json.dumps({"command":command,"approved_at":now()},ensure_ascii=False),encoding="utf-8")
-        approval.chmod(0o600)
-        event("command_approval_granted",{"command":command[:500]})
+        digest=hashlib.sha256(command.encode("utf-8")).hexdigest()
+        with PERMISSIONS_LOCK:
+            if bool(args.get("always",False)):
+                policy_path=PERMISSIONS/"always.json"
+                policy=readj(policy_path,{"commands":[],"hashes":[]})
+                legacy_hashes=policy.get("hashes",[]); legacy_commands=policy.get("commands",[])
+                if not isinstance(legacy_hashes,list): legacy_hashes=[]
+                if not isinstance(legacy_commands,list): legacy_commands=[]
+                hashes=set(str(item) for item in legacy_hashes if isinstance(item,str))
+                hashes.update(hashlib.sha256(item.encode("utf-8")).hexdigest() for item in legacy_commands if isinstance(item,str))
+                hashes.add(digest)
+                policy_path.write_text(json.dumps({"hashes":sorted(hashes),"updated_at":now()},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+                policy_path.chmod(0o600)
+                event("command_always_allowed",{"command_hash":digest})
+                return {"ok":True,"approved_always":True}
+            approval=PERMISSIONS/(digest+".json")
+            approval.write_text(json.dumps({"command_hash":digest,"approved_at":now()},ensure_ascii=False),encoding="utf-8")
+            approval.chmod(0o600)
+        event("command_approval_granted",{"command_hash":digest})
         return {"ok":True,"approved_once":True}
     if name=="termux_exec":
         command=str(args.get("command","")).strip()
         timeout=max(1,min(int(args.get("timeout",120)),900))
         if not command: raise ValueError("Command is empty")
-        policy=readj(PERMISSIONS/"always.json",{"commands":[]})
-        always_allowed=command in policy.get("commands",[])
-        approval=PERMISSIONS/(hashlib.sha256(command.encode("utf-8")).hexdigest()+".json")
-        approved=readj(approval,{})
-        if not always_allowed and approved.get("command") != command:
-            event("command_permission_requested",{"command":command[:500]})
+        digest=hashlib.sha256(command.encode("utf-8")).hexdigest()
+        with PERMISSIONS_LOCK:
+            policy=readj(PERMISSIONS/"always.json",{"commands":[],"hashes":[]})
+            stored_hashes=policy.get("hashes",[]); legacy_commands=policy.get("commands",[])
+            if not isinstance(stored_hashes,list): stored_hashes=[]
+            if not isinstance(legacy_commands,list): legacy_commands=[]
+            hashes=set(str(item) for item in stored_hashes if isinstance(item,str))
+            always_allowed=digest in hashes or command in legacy_commands
+            approval=PERMISSIONS/(digest+".json")
+            approved=readj(approval,{})
+            approved_once=approval.is_file() and (approved.get("command_hash")==digest or approved.get("command")==command)
+            if not always_allowed and not approved_once:
+                needs_approval=True
+            else:
+                needs_approval=False
+                if not always_allowed and approved_once:
+                    try: approval.unlink()
+                    except OSError: pass
+        if needs_approval:
+            event("command_permission_requested",{"command_hash":digest,"command_length":len(command)})
             return {"permission_required":True,"command":command}
-        if not always_allowed:
-            try: approval.unlink()
-            except OSError: pass
-        event("command_started",{"command":command[:500]}); start=time.monotonic()
+        command_id=uuid.uuid4().hex; run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None); start=time.monotonic()
         try:
-            log_dir=ROOT/"logs"/"commands"; log_dir.mkdir(parents=True,exist_ok=True)
-            command_id=uuid.uuid4().hex; stdout_path=log_dir/(command_id+".stdout.log"); stderr_path=log_dir/(command_id+".stderr.log")
+            log_dir=ROOT/"logs"/"commands"; log_dir.mkdir(parents=True,exist_ok=True); log_dir.chmod(0o700)
+            capture_limit=MAX_COMMAND_LOG_BYTES//4-100
+            stdout_data={"head":bytearray(),"tail":bytearray(),"total":0}
+            stderr_data={"head":bytearray(),"tail":bytearray(),"total":0}
+            def capture_output(pipe,target,stream_name):
+                last_report=time.monotonic()
+                while True:
+                    try: chunk=pipe.read(65536)
+                    except (OSError,ValueError): break
+                    if not chunk: break
+                    target["total"]+=len(chunk)
+                    if len(target["head"])<capture_limit:
+                        target["head"].extend(chunk[:capture_limit-len(target["head"])])
+                    target["tail"].extend(chunk)
+                    if len(target["tail"])>capture_limit: del target["tail"][:-capture_limit]
+                    if run_id and target["total"]%(1024*1024)<len(chunk) and time.monotonic()-last_report>=5:
+                        append_run_event(run_id,{"type":"command_progress","command_id":command_id,"stream":stream_name,"bytes":target["total"]})
+                        last_report=time.monotonic()
+                try: pipe.close()
+                except Exception: pass
+            def bounded_text(target,head_limit,tail_limit):
+                total=int(target["total"]); head=bytes(target["head"][:head_limit]) if head_limit else b""
+                tail=bytes(target["tail"][-tail_limit:]) if tail_limit else b""
+                if total<=len(head)+len(tail):
+                    overlap=max(0,len(head)+len(tail)-total); raw=head+tail[overlap:]
+                else:
+                    raw=head+b"\n...[truncated; use read_log for saved output]...\n"+tail
+                return raw.decode("utf-8",errors="replace"),total>len(head)+len(tail)
             timed_out=False; exit_code=0
-            with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
-                proc=subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),stdout=out,stderr=err,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)},start_new_session=True)
-                run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
-                if run_id: RUN_PROCESSES[run_id]=proc
-                try: exit_code=proc.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    timed_out=True
-                    try: os.killpg(proc.pid,signal.SIGTERM)
-                    except (ProcessLookupError,PermissionError): proc.terminate()
-                    try: proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        try: os.killpg(proc.pid,signal.SIGKILL)
-                        except (ProcessLookupError,PermissionError): proc.kill()
-                        proc.wait()
-                    exit_code=124
-                finally:
-                    if run_id: RUN_PROCESSES.pop(run_id,None)
-            def head_tail(path,head_limit,tail_limit):
-                with path.open("rb") as stream:
-                    head=stream.read(head_limit).decode("utf-8",errors="replace")
-                    stream.seek(0,os.SEEK_END); size=stream.tell(); stream.seek(max(0,size-tail_limit))
-                    tail=stream.read(tail_limit).decode("utf-8",errors="replace")
-                    return head,tail,size
-            stdout_head,stdout_tail,stdout_size=head_tail(stdout_path,4000,16000)
-            _,stderr_tail,stderr_size=head_tail(stderr_path,0,8000)
+            command_env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)}
+            if run_id: command_env["CODEIN_RUN_ID"]=str(run_id)
+            popen_args=(["/data/data/com.termux/files/usr/bin/bash","-lc",command],)
+            popen_options={"cwd":str(WORKSPACE),"stdout":subprocess.PIPE,"stderr":subprocess.PIPE,
+                "env":command_env,"start_new_session":True,"bufsize":0}
+            if run_id:
+                with RUNS_LOCK:
+                    control=RUN_CONTROLS.get(run_id); meta=read_run_meta(run_id)
+                    if control is None or control.cancelled.is_set() or meta.get("status") in RUN_TERMINAL|{"CANCELLING"}:
+                        raise RequestCancelled()
+                    proc=subprocess.Popen(*popen_args,**popen_options)
+                    RUN_PROCESSES[run_id]=proc
+                    try:
+                        meta["active_process_group"]=proc.pid; write_run_meta(run_id,meta)
+                    except Exception:
+                        RUN_PROCESSES.pop(run_id,None); terminate_process_group(proc); raise
+            else:
+                proc=subprocess.Popen(*popen_args,**popen_options)
+            event("command_started",{"command_hash":digest,"command_id":command_id,"command_length":len(command)})
+            out_reader=threading.Thread(target=capture_output,args=(proc.stdout,stdout_data,"stdout"),daemon=True)
+            err_reader=threading.Thread(target=capture_output,args=(proc.stderr,stderr_data,"stderr"),daemon=True)
+            if run_id:
+                append_run_event(run_id,{"type":"command_started","command_id":command_id})
+            out_reader.start(); err_reader.start()
+            try: exit_code=proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out=True; terminate_process_group(proc); exit_code=124
+            finally:
+                if run_id:
+                    with RUNS_LOCK:
+                        if RUN_PROCESSES.get(run_id) is proc: RUN_PROCESSES.pop(run_id,None)
+                        meta=read_run_meta(run_id)
+                        if meta.get("active_process_group")==proc.pid:
+                            meta.pop("active_process_group",None); write_run_meta(run_id,meta)
+            out_reader.join(1); err_reader.join(1)
+            background_stopped=out_reader.is_alive() or err_reader.is_alive()
+            if background_stopped:
+                terminate_process_group(proc,grace=0.5)
+                out_reader.join(2); err_reader.join(2)
+            stdout_text,stdout_truncated=bounded_text(stdout_data,3000,9000)
+            stderr_text,stderr_truncated=bounded_text(stderr_data,0,6000)
+            stdout_log,stdout_log_truncated=bounded_text(stdout_data,capture_limit,capture_limit)
+            stderr_log,stderr_log_truncated=bounded_text(stderr_data,capture_limit,capture_limit)
             full_log=log_dir/(command_id+".log")
-            with full_log.open("wb") as log:
-                log.write(b"=== STDOUT ===\n")
-                with stdout_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
-                log.write(b"\n=== STDERR ===\n")
-                with stderr_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
-            result={"exit_code":exit_code,"stdout":stdout_tail,"stderr":stderr_tail,"stdout_head":stdout_head,"stdout_tail":stdout_tail,"stderr_tail":stderr_tail,"truncated":stdout_size>20000 or stderr_size>8000,"full_log_path":str(full_log),"duration_ms":int((time.monotonic()-start)*1000)}
+            full_log_text=redact_sensitive("=== STDOUT ===\n"+stdout_log+"\n=== STDERR ===\n"+stderr_log+"\n")
+            log_bytes=full_log_text.encode("utf-8")
+            if len(log_bytes)>MAX_COMMAND_LOG_BYTES:
+                marker=b"\n...[log truncated]...\n"; log_bytes=log_bytes[:MAX_COMMAND_LOG_BYTES-len(marker)]+marker
+                full_log_text=log_bytes.decode("utf-8",errors="ignore")
+            full_log.write_text(full_log_text,encoding="utf-8"); full_log.chmod(0o600)
+            result={"exit_code":exit_code,"stdout":stdout_text,"stderr":stderr_text,"truncated":stdout_truncated or stderr_truncated or stdout_log_truncated or stderr_log_truncated or background_stopped,"log_id":command_id,"duration_ms":int((time.monotonic()-start)*1000)}
             if timed_out: result["error"]="Command timed out"
-            event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
+            elif background_stopped: result["error"]="Background child processes were stopped after the shell exited"
+            event("command_finished",{"command_hash":digest,"command_id":command_id,"exit_code":result["exit_code"],"duration_ms":result["duration_ms"],"truncated":result["truncated"]})
             return redact_sensitive(result)
+        except RequestCancelled:
+            raise
         except Exception as exc:
-            event("command_failed",{"error":str(exc)[:500],"duration_ms":int((time.monotonic()-start)*1000)})
-            return {"exit_code":1,"error":str(exc)[:1000],"duration_ms":int((time.monotonic()-start)*1000)}
+            event("command_failed",{"command_hash":digest,"command_id":command_id,"error_type":type(exc).__name__,"duration_ms":int((time.monotonic()-start)*1000)})
+            return {"exit_code":1,"error":redact_sensitive(str(exc))[:1000],"log_id":command_id,"duration_ms":int((time.monotonic()-start)*1000)}
     if name=="agent_room_get":
         journal=EVENTS/"journal.jsonl"
         lines=journal.read_text(encoding="utf-8").splitlines()[-25:] if journal.exists() else []
@@ -474,44 +599,89 @@ def dispatch_mcp_tool(name, args):
     if name=="run_status": return get_run_status(str(args.get("run_id","")))
     if name=="run_list": return list_agent_runs()
     if name=="run_cancel":
-        rid=str(args.get("run_id","")); control=RUN_CONTROLS.get(rid)
-        if control is None: return {"ok":False,"error":"Run is not active"}
-        control.cancel()
-        proc=RUN_PROCESSES.get(rid)
-        if proc is not None:
-            try: os.killpg(proc.pid,signal.SIGTERM)
-            except (ProcessLookupError,PermissionError): pass
-            try: proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                try: os.killpg(proc.pid,signal.SIGKILL)
-                except (ProcessLookupError,PermissionError): proc.kill()
-        append_run_event(rid,{"type":"status","status":"CANCELLING"})
+        rid=str(args.get("run_id","")); proc=None
+        with RUNS_LOCK:
+            meta=read_run_meta(rid); status=meta.get("status")
+            if status in RUN_TERMINAL: return {"ok":False,"error":"Run is not active"}
+            if status=="AWAITING_APPROVAL":
+                pending=meta.get("pending_approval") or {}
+                continuation_id=str(pending.get("continuation_id",""))
+                if continuation_id:
+                    with PENDING_CHATS_LOCK:
+                        PENDING_CHATS.pop(continuation_id,None)
+                        try: (PENDING_ROOT/(continuation_id+".json")).unlink()
+                        except OSError: pass
+                append_run_event(rid,{"type":"status","status":"CANCELLED"})
+                meta=read_run_meta(rid); meta["status"]="CANCELLED"; meta["pending_approval"]=None
+                meta["error"]="Cancelled by user"; meta["updated_at"]=now(); write_run_meta(rid,meta)
+                return {"ok":True,"run_id":rid,"status":"CANCELLED"}
+            control=RUN_CONTROLS.get(rid)
+            if control is None:
+                if status=="CANCELLING": return {"ok":True,"run_id":rid,"status":"CANCELLING"}
+                return {"ok":False,"error":"Run is not active"}
+            control.cancel(); proc=RUN_PROCESSES.get(rid)
+            meta["status"]="CANCELLING"; meta["updated_at"]=now(); write_run_meta(rid,meta)
+            append_run_event(rid,{"type":"status","status":"CANCELLING"})
+        if proc is not None: terminate_process_group(proc)
         return {"ok":True,"run_id":rid}
     if name=="run_approve":
-        rid=str(args.get("run_id","")); meta=read_run_meta(rid); pending=meta.get("pending_approval") or {}
-        if meta.get("status")!="AWAITING_APPROVAL": raise RuntimeError("Run is not awaiting approval")
-        if str(args.get("call_id",""))!=str(pending.get("call_id","")): raise RuntimeError("Approval call_id does not match")
-        decision=str(args.get("decision","deny"))
+        rid=str(args.get("run_id","")); decision=str(args.get("decision","deny"))
         if decision not in ("approve","deny"): raise ValueError("Invalid decision")
+        with RUNS_LOCK:
+            meta=read_run_meta(rid); pending=meta.get("pending_approval") or {}
+            if meta.get("status")!="AWAITING_APPROVAL": raise RuntimeError("Run is not awaiting approval")
+            if str(args.get("call_id",""))!=str(pending.get("call_id","")): raise RuntimeError("Approval call_id does not match")
+            meta["status"]="RESUMING"; meta["updated_at"]=now(); write_run_meta(rid,meta)
+            control=DurableRunControl(); RUN_CONTROLS[rid]=control
         append_run_event(rid,{"type":"status","status":"RESUMING"})
         previous_run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
         RUN_THREAD_CONTEXT.run_id=rid
+        def emit(payload):
+            control.check()
+            if payload.get("type") not in ("approval_required","done"):
+                append_run_event(rid,payload)
         try:
-            result=dispatch_mcp_tool("provider_chat_resume",{"continuation_id":pending.get("continuation_id"),"decision":decision,"always":bool(args.get("always",False))})
+            result=dispatch_mcp_tool("provider_chat_resume",{"continuation_id":pending.get("continuation_id"),"decision":decision,"always":bool(args.get("always",False)),"_emit":emit,"_cancel":control})
+        except Exception as exc:
+            result={"ok":False,"error":str(exc)[:1500]}
         finally:
             RUN_THREAD_CONTEXT.run_id=previous_run_id
-        append_run_event(rid,{"type":"done" if result.get("ok") else "error","content":result.get("content",""),"error":result.get("error","")})
-        meta=read_run_meta(rid); meta["pending_approval"]=None; meta["status"]="DONE" if result.get("ok") else "FAILED"
-        meta["result"]=result.get("content",""); meta["error"]=result.get("error",""); write_run_meta(rid,meta)
-        return {"ok":bool(result.get("ok")),"run_id":rid,"result":result}
+        if not isinstance(result,dict): result={"ok":False,"error":"Invalid approval continuation result"}
+        with RUNS_LOCK:
+            if RUN_CONTROLS.get(rid) is control: RUN_CONTROLS.pop(rid,None)
+            meta=read_run_meta(rid)
+            if control.cancelled.is_set() or result.get("error")=="Request cancelled":
+                meta["pending_approval"]=None; meta["status"]="CANCELLED"; meta["error"]="Request cancelled"; meta["updated_at"]=now(); write_run_meta(rid,meta)
+                append_run_event(rid,{"type":"status","status":"CANCELLED"})
+                return {"ok":False,"run_id":rid,"status":"CANCELLED","error":"Request cancelled"}
+            if result.get("permission_required"):
+                continuation_id=str(result.get("continuation_id",""))
+                if continuation_id:
+                    meta["status"]="AWAITING_APPROVAL"
+                    meta["pending_approval"]={"call_id":continuation_id,"continuation_id":continuation_id,"command":str(result.get("command",""))}
+                    meta.pop("result",None); meta.pop("error",None); meta["updated_at"]=now(); write_run_meta(rid,meta)
+                    append_run_event(rid,{"type":"approval_required","command":meta["pending_approval"]["command"],"call_id":continuation_id})
+                    return {"ok":True,"run_id":rid,"status":"AWAITING_APPROVAL","result":result}
+                result={"ok":False,"error":"Provider requested approval without a continuation ID"}
+            success=bool(result.get("ok"))
+            meta["pending_approval"]=None; meta["status"]="DONE" if success else "FAILED"; meta["updated_at"]=now()
+            if success:
+                meta["result"]=result.get("content",""); meta.pop("error",None)
+                append_run_event(rid,{"type":"done","content":result.get("content","")})
+            else:
+                meta["error"]=result.get("error","Run failed"); meta.pop("result",None)
+                append_run_event(rid,{"type":"error","error":meta["error"]})
+            write_run_meta(rid,meta)
+        return {"ok":success,"run_id":rid,"status":"DONE" if success else "FAILED","result":result}
     if name=="provider_chat_resume":
         cid=str(args.get("continuation_id","")).strip()
         with PENDING_CHATS_LOCK:
             state=PENDING_CHATS.pop(cid,None)
-        pending_path=PENDING_ROOT/(cid+".json")
-        if state is None: state=readj(pending_path,None)
-        try: pending_path.unlink()
-        except OSError: pass
+            pending_path=PENDING_ROOT/(cid+".json")
+            if state is None: state=readj(pending_path,None)
+            if state:
+                try: pending_path.unlink()
+                except OSError: pass
         if not state:
             raise RuntimeError("This approval request expired or was already used. Send the request again.")
         if time.time()-float(state.get("at",0))>PENDING_APPROVAL_TTL:
@@ -520,16 +690,32 @@ def dispatch_mcp_tool(name, args):
         pending=state.get("call") or {}
         pending_name=str(pending.get("name",""))
         pending_args=dict(pending.get("args") or {})
+        cancel_control=args.get("_cancel")
         if decision=="deny":
             result={"ok":False,"denied":True,"error":"The user denied this command. Nothing was executed."}
         else:
-            if pending_name=="termux_exec":
-                command=str(pending_args.get("command","")).strip()
-                if command:
-                    try: dispatch_mcp_tool("termux_command_approve",{"command":command,"always":bool(args.get("always",False))})
-                    except Exception: pass
-            try: result=dispatch_mcp_tool(pending_name,pending_args)
-            except Exception as exc: result={"error":str(exc)[:1500]}
+            def execute_pending_tool():
+                if cancel_control is not None: cancel_control.check()
+                if pending_name=="termux_exec":
+                    command=str(pending_args.get("command","")).strip()
+                    if command:
+                        dispatch_mcp_tool("termux_command_approve",{"command":command,"always":bool(args.get("always",False))})
+                return dispatch_mcp_tool(pending_name,pending_args)
+            run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
+            try:
+                if pending_name=="termux_exec" and run_id:
+                    with RUNS_LOCK:
+                        if cancel_control is not None: cancel_control.check()
+                        status=read_run_meta(run_id).get("status")
+                        if status not in ("RUNNING","RESUMING"):
+                            raise RequestCancelled()
+                        result=execute_pending_tool()
+                else:
+                    result=execute_pending_tool()
+            except RequestCancelled:
+                raise
+            except Exception as exc:
+                result={"error":str(exc)[:1500]}
         status,res=provider_chat({
             "provider":state["pid"],
             "model":state["model"],
@@ -537,10 +723,10 @@ def dispatch_mcp_tool(name, args):
             "messages":[{"role":"user","content":"Continue the task to a final answer."}],
             "timeout":state.get("timeout",120),
             "resume":{"native":state.get("native") or [],"call":pending,"result":result},
-        })
+        },emit=args.get("_emit"),cancel=args.get("_cancel"))
         if status!=200 or not res.get("ok"): return res
         res["tool_result"]=result
-        res["continuation_id"]=cid
+        if not res.get("permission_required"): res.setdefault("continuation_id",cid)
         return res
     if name=="provider_chat":
         status,result=provider_chat(args)
@@ -1048,32 +1234,57 @@ def redact_sensitive(value):
     if not isinstance(value,str): return value
     patterns=(
         (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s\"',;]+",r"\1[REDACTED]"),
-        (r"(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b\s*[:=]\s*)[^\s\"',;]+",r"\1[REDACTED]"),
+        (r'''(?i)(\b[\w.-]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)[\w.-]*\b\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s"',;]+)''',r"\1[REDACTED]"),
         (r"(?i)(x-api-key\s*:\s*)[^\s\"',;]+",r"\1[REDACTED]"),
         (r"(?i)(--(?:token|api-key|password|secret)\s+)[^\s]+",r"\1[REDACTED]"),
     )
     for pattern,replacement in patterns: value=re.sub(pattern,replacement,value)
     return value
 
+def latest_run_event_seq(path):
+    if not path.exists(): return 0
+    try:
+        with path.open("rb") as stream:
+            position=stream.seek(0,os.SEEK_END); suffix=b""
+            while position:
+                size=min(4096,position); position-=size; stream.seek(position)
+                suffix=stream.read(size)+suffix
+                for line in reversed(suffix.splitlines()):
+                    try:
+                        item=json.loads(line)
+                        if isinstance(item,dict): return max(0,int(item.get("seq",0)))
+                    except (TypeError,ValueError): continue
+    except OSError: pass
+    return 0
+
 def append_run_event(run_id,payload):
     with RUNS_LOCK:
-        directory=run_dir(run_id); meta=readj(directory/"meta.json",{})
-        seq=int(meta.get("last_seq",0))+1; item=redact_sensitive({"seq":seq,"at":now(),**payload})
-        with (directory/"events.jsonl").open("a",encoding="utf-8") as stream:
+        directory=run_dir(run_id); meta=readj(directory/"meta.json",{}); path=directory/"events.jsonl"
+        if path.exists() and path.stat().st_size:
+            with path.open("r+b") as stream:
+                stream.seek(-1,os.SEEK_END)
+                if stream.read(1)!=b"\n":
+                    stream.seek(0,os.SEEK_END); stream.write(b"\n"); stream.flush(); os.fsync(stream.fileno())
+        seq=max(int(meta.get("last_seq",0)),latest_run_event_seq(path))+1
+        item=redact_sensitive({"seq":seq,"at":now(),**payload})
+        with path.open("a",encoding="utf-8") as stream:
             stream.write(json.dumps(item,ensure_ascii=False,separators=(",",":"))+"\n"); stream.flush(); os.fsync(stream.fileno())
         meta["last_seq"]=seq; meta["updated_at"]=now(); write_run_meta(run_id,meta)
         return item
 
 def read_run_events(run_id,after_seq=0):
-    directory=run_dir(run_id); items=[]; path=directory/"events.jsonl"
+    directory=run_dir(run_id); items=[]; path=directory/"events.jsonl"; last_seq=0
     if path.exists():
         with path.open(encoding="utf-8") as stream:
             for line in stream:
                 try: item=json.loads(line)
                 except ValueError: continue
-                if int(item.get("seq",0))>max(0,after_seq): items.append(item)
+                try: seq=int(item.get("seq",0))
+                except (TypeError,ValueError): continue
+                last_seq=max(last_seq,seq)
+                if seq>max(0,after_seq): items.append(item)
     meta=read_run_meta(run_id)
-    return {"ok":True,"run_id":run_id,"events":items,"last_seq":int(meta.get("last_seq",0))}
+    return {"ok":True,"run_id":run_id,"events":items,"last_seq":max(last_seq,int(meta.get("last_seq",0)))}
 
 def get_run_status(run_id): return {"ok":True,"run_id":run_id,**read_run_meta(run_id)}
 
@@ -1086,14 +1297,29 @@ def list_agent_runs():
 
 def start_agent_run(arguments):
     args=dict(arguments or {}); args.pop("test_api_key",None)
+    idempotency_key=str(args.pop("idempotency_key","") or "").strip()
+    if len(idempotency_key)>128: raise ValueError("idempotency_key must be at most 128 characters")
     if not isinstance(args.get("messages"),list) or not args["messages"]: raise ValueError("messages must be a non-empty array")
-    run_id=uuid.uuid4().hex; directory=RUNS_ROOT/run_id; directory.mkdir(mode=0o700)
-    meta={"run_id":run_id,"status":"RUNNING","provider":str(args.get("provider","")),"model":str(args.get("model","")),"created_at":now(),"updated_at":now(),"last_seq":0,"pending_approval":None}
-    write_run_meta(run_id,meta)
-    (directory/"messages.json").write_text(json.dumps(redact_sensitive({"request":args,"native_history":args.get("messages",[])}),ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-    (directory/"messages.json").chmod(0o600)
-    control=DurableRunControl(); RUN_CONTROLS[run_id]=control
-    append_run_event(run_id,{"type":"status","status":"RUNNING"})
+    request_hash=hashlib.sha256(json.dumps(args,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode("utf-8")).hexdigest()
+    run_id=uuid.uuid5(uuid.NAMESPACE_URL,"codein-agent-run:"+idempotency_key).hex if idempotency_key else uuid.uuid4().hex
+    with RUNS_LOCK:
+        directory=RUNS_ROOT/run_id
+        if directory.exists():
+            existing=readj(directory/"meta.json",{})
+            if idempotency_key and not existing: return {"ok":False,"error":"previous_run_start_incomplete_use_a_new_idempotency_key"}
+            if idempotency_key and existing.get("request_hash")==request_hash:
+                return {"ok":True,"run_id":run_id,"status":existing.get("status","UNKNOWN"),"duplicate":True}
+            if idempotency_key: return {"ok":False,"error":"idempotency_key_reused_with_different_request"}
+            while directory.exists():
+                run_id=uuid.uuid4().hex; directory=RUNS_ROOT/run_id
+        directory.mkdir(mode=0o700)
+        meta={"run_id":run_id,"status":"RUNNING","provider":str(args.get("provider","")),"model":str(args.get("model","")),"created_at":now(),"updated_at":now(),"last_seq":0,"pending_approval":None}
+        if idempotency_key: meta["request_hash"]=request_hash
+        write_run_meta(run_id,meta)
+        (directory/"messages.json").write_text(json.dumps(redact_sensitive({"request":args,"native_history":args.get("messages",[])}),ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        (directory/"messages.json").chmod(0o600)
+        control=DurableRunControl(); RUN_CONTROLS[run_id]=control
+        append_run_event(run_id,{"type":"status","status":"RUNNING"})
     def worker():
         RUN_THREAD_CONTEXT.run_id=run_id
         def emit(payload):
@@ -1102,39 +1328,69 @@ def start_agent_run(arguments):
             append_run_event(run_id,payload)
         try:
             status,result=provider_chat(args,emit,control)
+            if control.cancelled.is_set(): raise RequestCancelled()
+            if not isinstance(result,dict): result={"ok":False,"error":"Invalid provider result"}
             if result.get("permission_required"):
-                meta=read_run_meta(run_id); meta["status"]="AWAITING_APPROVAL"
-                meta["pending_approval"]={"call_id":str(result.get("continuation_id","")),"continuation_id":result.get("continuation_id"),"command":result.get("command","")}
-                write_run_meta(run_id,meta)
-                append_run_event(run_id,{"type":"approval_required","command":result.get("command",""),"call_id":meta["pending_approval"]["call_id"]})
+                with RUNS_LOCK:
+                    meta=read_run_meta(run_id); meta["status"]="AWAITING_APPROVAL"
+                    meta["pending_approval"]={"call_id":str(result.get("continuation_id","")),"continuation_id":result.get("continuation_id"),"command":result.get("command","")}
+                    meta["updated_at"]=now(); write_run_meta(run_id,meta)
+                    append_run_event(run_id,{"type":"approval_required","command":result.get("command",""),"call_id":meta["pending_approval"]["call_id"]})
             elif status==200 and result.get("ok"):
-                append_run_event(run_id,{"type":"done","content":result.get("content","")})
-                meta=read_run_meta(run_id); meta["status"]="DONE"; meta["result"]=result.get("content",""); write_run_meta(run_id,meta)
+                with RUNS_LOCK:
+                    append_run_event(run_id,{"type":"done","content":result.get("content","")})
+                    meta=read_run_meta(run_id); meta["status"]="DONE"; meta["result"]=result.get("content",""); meta["updated_at"]=now(); write_run_meta(run_id,meta)
             else:
                 error_text=result.get("error","Run failed")
-                append_run_event(run_id,{"type":"error","error":error_text})
-                meta=read_run_meta(run_id); meta["status"]="CANCELLED" if status==499 else "FAILED"; meta["error"]=error_text; write_run_meta(run_id,meta)
+                with RUNS_LOCK:
+                    append_run_event(run_id,{"type":"error","error":error_text})
+                    meta=read_run_meta(run_id); meta["status"]="CANCELLED" if status==499 else "FAILED"; meta["error"]=error_text; meta["updated_at"]=now(); write_run_meta(run_id,meta)
         except RequestCancelled:
-            append_run_event(run_id,{"type":"status","status":"CANCELLED"})
-            meta=read_run_meta(run_id); meta["status"]="CANCELLED"; write_run_meta(run_id,meta)
+            with RUNS_LOCK:
+                append_run_event(run_id,{"type":"status","status":"CANCELLED"})
+                meta=read_run_meta(run_id); meta["status"]="CANCELLED"; meta["updated_at"]=now(); write_run_meta(run_id,meta)
         except Exception as exc:
             error_type=type(exc).__name__
-            append_run_event(run_id,{"type":"error","error":error_type})
-            meta=read_run_meta(run_id); meta["status"]="FAILED"; meta["error"]=error_type; write_run_meta(run_id,meta)
+            with RUNS_LOCK:
+                append_run_event(run_id,{"type":"error","error":error_type})
+                meta=read_run_meta(run_id); meta["status"]="FAILED"; meta["error"]=error_type; meta["updated_at"]=now(); write_run_meta(run_id,meta)
         finally:
             RUN_PROCESSES.pop(run_id,None)
             RUN_THREAD_CONTEXT.run_id=None
-            RUN_CONTROLS.pop(run_id,None)
+            if RUN_CONTROLS.get(run_id) is control: RUN_CONTROLS.pop(run_id,None)
     threading.Thread(target=worker,name="codein-run-"+run_id[:8],daemon=True).start()
     return {"ok":True,"run_id":run_id,"status":"RUNNING"}
 
 def recover_agent_runs():
-    for path in RUNS_ROOT.iterdir():
-        if not path.is_dir() or path.name=="pending": continue
-        meta=readj(path/"meta.json",{})
-        if meta.get("status")=="RUNNING":
-            append_run_event(path.name,{"type":"status","status":"INTERRUPTED","reason":"Bridge restarted"})
-            meta=readj(path/"meta.json",meta); meta["status"]="INTERRUPTED"; meta["updated_at"]=now(); write_run_meta(path.name,meta)
+    with RUNS_LOCK:
+        for path in RUNS_ROOT.iterdir():
+            if not path.is_dir() or path.name=="pending": continue
+            meta=readj(path/"meta.json",{})
+            if not meta: continue
+            last_seq=latest_run_event_seq(path/"events.jsonl")
+            if last_seq>int(meta.get("last_seq",0)):
+                meta["last_seq"]=last_seq; write_run_meta(path.name,meta)
+            group_stopped=True
+            process_group=meta.get("active_process_group")
+            if process_group is not None:
+                group_stopped=terminate_recorded_process_group(process_group,path.name)
+                if group_stopped: meta.pop("active_process_group",None)
+                else: meta["recovery_warning"]="Could not safely verify or stop the recorded command process group"
+                write_run_meta(path.name,meta)
+            if meta.get("status") in ("RUNNING","RESUMING","CANCELLING"):
+                if meta.get("status")=="RESUMING":
+                    pending=meta.get("pending_approval") or {}
+                    continuation_id=str(pending.get("continuation_id",""))
+                    if continuation_id:
+                        try: (PENDING_ROOT/(continuation_id+".json")).unlink()
+                        except OSError: pass
+                    meta["pending_approval"]=None; meta["updated_at"]=now(); write_run_meta(path.name,meta)
+                if not group_stopped:
+                    reason="Bridge restarted during cancellation; a command process may still be running" if meta.get("status")=="CANCELLING" else "Bridge restarted; a command process may still be running"
+                else:
+                    reason="Bridge restarted while cancellation was in progress" if meta.get("status")=="CANCELLING" else "Bridge restarted"
+                append_run_event(path.name,{"type":"status","status":"INTERRUPTED","reason":reason})
+                meta=readj(path/"meta.json",meta); meta["status"]="INTERRUPTED"; meta["error"]=reason; meta["pending_approval"]=None; meta["updated_at"]=now(); write_run_meta(path.name,meta)
 
 def readj(p, fallback):
     try: return json.loads(p.read_text(encoding="utf-8"))
@@ -1409,14 +1665,8 @@ class Handler(BaseHTTPRequestHandler):
             event("session_saved",{"id":sid,"title":data.get("title","")})
             return self.sendj(200,{"ok":True,"id":sid})
         if p=="/api/exec":
-            command=str(data.get("command","")).strip(); timeout=max(1,min(int(data.get("timeout",120)),900))
-            if not command: return self.sendj(400,{"ok":False,"error":"Command is empty"})
-            event("command_started",{"command":command[:500]}); start=time.monotonic()
-            try:
-                r=subprocess.run(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),capture_output=True,text=True,timeout=timeout,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)})
-                result={"ok":r.returncode==0,"exit_code":r.returncode,"stdout":r.stdout[-100000:],"stderr":r.stderr[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
-            except subprocess.TimeoutExpired as e: result={"ok":False,"error":"Command timed out","stdout":str(e.stdout or "")[-100000:],"stderr":str(e.stderr or "")[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
-            event("command_finished",{"exit_code":result.get("exit_code"),"duration_ms":result.get("duration_ms")})
+            try: result=dispatch_mcp_tool("termux_exec",data)
+            except Exception as exc: return self.sendj(400,{"ok":False,"error":redact_sensitive(str(exc))[:1000]})
             return self.sendj(200,result)
         return self.sendj(404,{"ok":False,"error":"Unknown endpoint"})
 
@@ -1431,5 +1681,3 @@ if __name__ == "__main__":
     print(f"[Codein] Workspace: {WORKSPACE}")
     print("[Codein] Ctrl+C to stop.")
     ThreadingHTTPServer(("127.0.0.1",PORT),Handler).serve_forever()
-
-

@@ -6,11 +6,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.ensureActive
@@ -21,6 +25,22 @@ import kotlinx.coroutines.ensureActive
  */
 data class TermuxProvider(val id: String, val name: String, val defaultModel: String, val models: List<String>, val configured: Boolean, val credentialName: String, val accountCredential: String = "", val keyOptional: Boolean = false)
 class MissingProviderCredential(val credentialName: String, val providerName: String) : IllegalStateException("Missing API key for $providerName")
+
+private const val ACTIVE_RUN_CHECKPOINT_KEY = "active_run_checkpoint"
+
+internal fun durableRunId(idempotencyKey: String): String {
+    val namespace = UUID.fromString("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
+    val namespaceBytes = ByteBuffer.allocate(16)
+        .putLong(namespace.mostSignificantBits)
+        .putLong(namespace.leastSignificantBits)
+        .array()
+    val name = "codein-agent-run:$idempotencyKey".toByteArray(Charsets.UTF_8)
+    val digest = MessageDigest.getInstance("SHA-1").digest(namespaceBytes + name)
+    digest[6] = ((digest[6].toInt() and 0x0f) or 0x50).toByte()
+    digest[8] = ((digest[8].toInt() and 0x3f) or 0x80).toByte()
+    val bytes = ByteBuffer.wrap(digest)
+    return UUID(bytes.long, bytes.long).toString().replace("-", "")
+}
 
 class TermuxBridgeClient(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("codein_termux_bridge", Context.MODE_PRIVATE)
@@ -37,6 +57,25 @@ class TermuxBridgeClient(context: Context) {
 
     val isConfigured: Boolean get() = bearerToken.isNotBlank() && baseUrl.startsWith("http://127.0.0.1")
 
+    fun activeRunCheckpoint(): JSONObject? = prefs.getString(ACTIVE_RUN_CHECKPOINT_KEY, null)
+        ?.takeIf(String::isNotBlank)
+        ?.let { runCatching { JSONObject(it) }.getOrNull() }
+
+    fun clearActiveRunCheckpoint(runId: String? = null) {
+        val checkpoint = activeRunCheckpoint()
+        if (runId == null || checkpoint?.optString("run_id") == runId) {
+            prefs.edit().remove(ACTIVE_RUN_CHECKPOINT_KEY).apply()
+        }
+    }
+
+    private fun saveActiveRunCheckpoint(runId: String, provider: String, model: String) {
+        check(prefs.edit().putString(ACTIVE_RUN_CHECKPOINT_KEY, JSONObject()
+            .put("run_id", runId)
+            .put("provider", provider)
+            .put("model", model)
+            .toString()).commit()) { "Could not save the active run checkpoint" }
+    }
+
     /** Initialize MCP and confirm its tool catalog is reachable. */
     suspend fun health(): JSONObject {
         val init = mcpRequest("initialize", JSONObject()
@@ -47,13 +86,13 @@ class TermuxBridgeClient(context: Context) {
         val tools = mcpRequest("tools/list", JSONObject())
         val toolArray = tools.optJSONArray("tools") ?: JSONArray()
         val toolNames = (0 until toolArray.length()).mapNotNull { toolArray.optJSONObject(it)?.optString("name") }.toSet()
-        val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_model_test", "provider_chat", "composio_platform_configure", "composio_tools_refresh", "run_start", "run_subscribe", "run_status", "run_cancel", "run_approve", "run_list")
+        val requiredTools = setOf("termux_exec", "termux_command_approve", "read_log", "agent_room_get", "provider_models_list", "provider_model_test", "provider_chat", "composio_platform_configure", "composio_tools_refresh", "run_start", "run_subscribe", "run_status", "run_cancel", "run_approve", "run_list")
         val missing = requiredTools - toolNames
         check(missing.isEmpty()) {
             "پل MCP ترموکس قدیمی است (ابزارهای لازم را ندارد). از تنظیمات، تب اتصال Termux، دستور نصب/به‌روزرسانی را کپی و در Termux اجرا کن."
         }
         val serverVersion = init.optJSONObject("serverInfo")?.optString("version").orEmpty()
-        check(versionAtLeast(serverVersion, "1.7.0")) {
+        check(versionAtLeast(serverVersion, "1.8.0")) {
             "نسخهٔ پل MCP ترموکس قدیمی است ($serverVersion). از تنظیمات، تب اتصال Termux، دستور نصب/به‌روزرسانی را کپی و در Termux اجرا کن؛ کلیدها و توکن قبلی حفظ می‌شوند."
         }
         return JSONObject()
@@ -163,8 +202,16 @@ class TermuxBridgeClient(context: Context) {
                 .put("run_id", parts[0])
                 .put("call_id", parts[1])
                 .put("decision", decision)
-                .put("always", always), 300)
-            return response.optJSONObject("result") ?: response
+                .put("always", always), 1800)
+            val result = response.optJSONObject("result") ?: response
+            result.put("run_id", parts[0])
+            if (result.optBoolean("permission_required")) {
+                val nextCallId = result.optString("continuation_id")
+                if (nextCallId.isNotBlank()) result.put("continuation_id", parts[0] + "|" + nextCallId)
+            } else {
+                clearActiveRunCheckpoint(parts[0])
+            }
+            return result
         }
         return mcpTool("provider_chat_resume", JSONObject()
             .put("continuation_id", continuationId)
@@ -190,6 +237,66 @@ class TermuxBridgeClient(context: Context) {
         return result
     }
 
+    suspend fun cancelRun(runId: String): JSONObject {
+        require(runId.isNotBlank()) { "Missing run ID" }
+        return mcpTool("run_cancel", JSONObject().put("run_id", runId), 10)
+    }
+
+    private fun cancelRunBlocking(runId: String): Boolean {
+        repeat(6) { attempt ->
+            var retry = false
+            val connection = try {
+                (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 2_000
+                    readTimeout = 3_000
+                    setRequestProperty("Authorization", "Bearer " + bearerToken)
+                    setRequestProperty("MCP-Protocol-Version", "2025-03-26")
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    doOutput = true
+                }
+            } catch (_: Exception) {
+                retry = true
+                null
+            }
+            if (connection != null) {
+                try {
+                    val payload = JSONObject()
+                        .put("jsonrpc", "2.0")
+                        .put("id", UUID.randomUUID().toString())
+                        .put("method", "tools/call")
+                        .put("params", JSONObject()
+                            .put("name", "run_cancel")
+                            .put("arguments", JSONObject().put("run_id", runId)))
+                    connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                    val statusCode = connection.responseCode
+                    val stream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
+                    val response = JSONObject(stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty())
+                    val result = response.optJSONObject("result")
+                    val content = result?.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty()
+                    if (result?.optBoolean("isError") == true || response.has("error")) {
+                        if (content.contains("Run not found", ignoreCase = true) ||
+                            response.optJSONObject("error")?.optString("message")?.contains("Run not found", ignoreCase = true) == true) {
+                            retry = true
+                        } else {
+                            return false
+                        }
+                    } else {
+                        val cancel = runCatching { JSONObject(content) }.getOrNull() ?: return false
+                        return cancel.optBoolean("ok") || cancel.optString("status") in setOf("CANCELLING", "CANCELLED") ||
+                            cancel.optString("error") == "Run is not active"
+                    }
+                } catch (_: Exception) {
+                    retry = true
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            if (retry && attempt < 5) Thread.sleep(250L + attempt * 150L)
+        }
+        return false
+    }
+
     /** Start a durable run, then reconnect to its sequenced event log until completion or approval. */
     @OptIn(InternalCoroutinesApi::class)
     suspend fun chatStream(
@@ -197,19 +304,14 @@ class TermuxBridgeClient(context: Context) {
         model: String,
         messages: JSONArray,
         system: String,
+        resumeRunId: String? = null,
         onEvent: suspend (JSONObject) -> Unit
     ): JSONObject = withContext(Dispatchers.IO) {
         check(bearerToken.isNotBlank()) { "توکن پل MCP ترموکس وارد نشده است." }
-        val runStart = mcpTool("run_start", JSONObject()
-            .put("provider", provider)
-            .put("model", model)
-            .put("messages", messages)
-            .put("system", system)
-            .put("timeout", 120)
-            .put("total_timeout", 1800)
-            .put("max_turns", 40), 45)
-        val runId = runStart.optString("run_id")
+        val idempotencyKey = if (resumeRunId.isNullOrBlank()) UUID.randomUUID().toString() else ""
+        val runId = resumeRunId?.takeIf(String::isNotBlank) ?: durableRunId(idempotencyKey)
         check(runId.isNotBlank()) { "پل نتوانست اجرای پایدار را ایجاد کند." }
+        saveActiveRunCheckpoint(runId, provider, model)
         val activeRun = AtomicReference(runId)
         val activeConnection = AtomicReference<HttpURLConnection?>(null)
         val requestJob = currentCoroutineContext()[Job]
@@ -217,28 +319,7 @@ class TermuxBridgeClient(context: Context) {
             activeConnection.getAndSet(null)?.disconnect()
             if (cause is CancellationException) {
                 Thread {
-                    runCatching {
-                        val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
-                            requestMethod = "POST"
-                            connectTimeout = 2_000
-                            readTimeout = 2_000
-                            setRequestProperty("Authorization", "Bearer " + bearerToken)
-                            setRequestProperty("MCP-Protocol-Version", "2025-03-26")
-                            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                            doOutput = true
-                        }
-                        try {
-                            val payload = JSONObject()
-                                .put("jsonrpc", "2.0")
-                                .put("id", UUID.randomUUID().toString())
-                                .put("method", "tools/call")
-                                .put("params", JSONObject()
-                                    .put("name", "run_cancel")
-                                    .put("arguments", JSONObject().put("run_id", activeRun.get())))
-                            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-                            connection.responseCode
-                        } finally { connection.disconnect() }
-                    }
+                    if (cancelRunBlocking(activeRun.get())) clearActiveRunCheckpoint(activeRun.get())
                 }.apply { isDaemon = true; start() }
             }
         }
@@ -276,9 +357,12 @@ class TermuxBridgeClient(context: Context) {
                     .put("ok", false)
                     .put("error", event.optString("error").ifBlank { "اجرای ایجنت ناموفق بود." })
                     .put("run_id", runId)
-                "status" -> if (event.optString("status") == "INTERRUPTED") {
-                    finalResult = JSONObject().put("ok", false)
-                        .put("error", "پل هنگام اجرای کار راه‌اندازی مجدد شد؛ اجرای قبلی برای بازیابی نگهداری شده است.")
+                "status" -> when (event.optString("status")) {
+                    "INTERRUPTED" -> finalResult = JSONObject().put("ok", false)
+                        .put("error", "پل هنگام اجرای کار راه‌اندازی مجدد شد؛ اجرای قبلی متوقف شده است. درخواست را دوباره بفرست تا ادامه پیدا کند.")
+                        .put("run_id", runId)
+                    "CANCELLED" -> finalResult = JSONObject().put("ok", false)
+                        .put("error", "اجرای درخواست لغو شد.")
                         .put("run_id", runId)
                 }
             }
@@ -286,8 +370,47 @@ class TermuxBridgeClient(context: Context) {
         }
 
         try {
+            if (!resumeRunId.isNullOrBlank()) {
+                val status = try {
+                    mcpTool("run_status", JSONObject().put("run_id", runId), 10)
+                } catch (error: IllegalStateException) {
+                    if (error.message?.contains("Run not found", ignoreCase = true) == true) {
+                        clearActiveRunCheckpoint(runId)
+                    }
+                    throw error
+                }
+                if (status.optString("status").isBlank()) {
+                    clearActiveRunCheckpoint(runId)
+                    error("The saved Termux run is no longer available")
+                }
+            }
+            if (resumeRunId.isNullOrBlank()) {
+                val startArguments = JSONObject()
+                    .put("provider", provider)
+                    .put("model", model)
+                    .put("messages", messages)
+                    .put("system", system)
+                    .put("timeout", 120)
+                    .put("total_timeout", 1800)
+                    .put("max_turns", 40)
+                    .put("idempotency_key", idempotencyKey)
+                var runStart: JSONObject? = null
+                for (attempt in 0..2) {
+                    try {
+                        runStart = mcpTool("run_start", startArguments, 45)
+                        break
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: IOException) {
+                        if (attempt == 2) throw error
+                        delay(500L shl attempt)
+                    }
+                }
+                check(runStart?.optString("run_id") == runId) { "پل اجرای پایدار را با شناسهٔ موردانتظار نساخت." }
+            }
             while (finalResult == null) {
                 currentCoroutineContext().ensureActive()
+                val sequenceAtConnect = lastSeq
                 val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 8_000
@@ -312,7 +435,9 @@ class TermuxBridgeClient(context: Context) {
                     val status = connection.responseCode
                     if (status !in 200..299) {
                         val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                        throw IllegalStateException("MCP run stream HTTP $status: " + detail.take(500))
+                        val message = "MCP run stream HTTP $status: " + detail.take(500)
+                        if (status >= 500) throw IOException(message)
+                        throw IllegalStateException(message)
                     }
                     check(connection.contentType?.contains("text/event-stream", ignoreCase = true) == true) {
                         "پل Termux استریم پایدار Run را پشتیبانی نمی‌کند؛ آن را به‌روزرسانی کن."
@@ -345,14 +470,22 @@ class TermuxBridgeClient(context: Context) {
                         }
                         if (dataLines.isNotEmpty() && finalResult == null) dispatchFrame()
                     }
-                    retryDelay = 1L
+                    if (lastSeq > sequenceAtConnect) retryDelay = 1L
+                } catch (error: IOException) {
+                    if (lastSeq > sequenceAtConnect) retryDelay = 1L
                 } finally {
                     activeConnection.compareAndSet(connection, null)
                     connection.disconnect()
                 }
 
                 if (finalResult == null) {
-                    val status = runCatching { mcpTool("run_status", JSONObject().put("run_id", runId), 10) }.getOrNull()
+                    val status = try {
+                        mcpTool("run_status", JSONObject().put("run_id", runId), 10)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
                     when (status?.optString("status")) {
                         "DONE" -> finalResult = JSONObject().put("ok", true).put("provider", provider)
                             .put("model", model).put("content", status.optString("result", answer.toString())).put("run_id", runId)
@@ -366,16 +499,18 @@ class TermuxBridgeClient(context: Context) {
                                 .put("continuation_id", runId + "|" + callId).put("run_id", runId)
                         }
                         "INTERRUPTED" -> finalResult = JSONObject().put("ok", false)
-                            .put("error", "پل هنگام اجرای کار راه‌اندازی مجدد شد؛ اجرای قبلی برای بازیابی نگهداری شده است.")
+                            .put("error", "پل هنگام اجرای کار راه‌اندازی مجدد شد؛ اجرای قبلی متوقف شده است. درخواست را دوباره بفرست تا ادامه پیدا کند.")
                             .put("run_id", runId)
                     }
                 }
                 if (finalResult == null) {
-                    Thread.sleep(retryDelay * 1000L)
+                    delay(retryDelay * 1000L)
                     retryDelay = (retryDelay * 2L).coerceAtMost(16L)
                 }
             }
-            finalResult ?: error("اجرای پایدار بدون نتیجه پایان یافت.")
+            val result = finalResult ?: error("اجرای پایدار بدون نتیجه پایان یافت.")
+            if (!result.optBoolean("permission_required")) clearActiveRunCheckpoint(runId)
+            result
         } catch (cancelled: CancellationException) {
             throw cancelled
         } finally {
@@ -442,6 +577,7 @@ class TermuxBridgeClient(context: Context) {
 
     private var mcpRequestId = 0
 
+    @OptIn(InternalCoroutinesApi::class)
     private suspend fun mcpRequest(method: String, params: JSONObject, timeoutSeconds: Int = 45): JSONObject =
         withContext(Dispatchers.IO) {
             check(bearerToken.isNotBlank()) { "MCP token is missing. Run the Termux installer and copy its local token." }
@@ -450,12 +586,15 @@ class TermuxBridgeClient(context: Context) {
             val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = timeoutSeconds.coerceIn(1, 8) * 1000
-                readTimeout = timeoutSeconds.coerceIn(1, 900) * 1000
+                readTimeout = timeoutSeconds.coerceIn(1, 1800) * 1000
                 setRequestProperty("Authorization", "Bearer " + bearerToken)
                 setRequestProperty("MCP-Protocol-Version", "2025-03-26")
                 setRequestProperty("Accept", "application/json, text/event-stream")
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 doOutput = true
+            }
+            val cancellation = currentCoroutineContext()[Job]?.invokeOnCompletion(onCancelling = true) { cause ->
+                if (cause is CancellationException) connection.disconnect()
             }
             try {
                 connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
@@ -470,6 +609,7 @@ class TermuxBridgeClient(context: Context) {
                 }
                 response.optJSONObject("result") ?: JSONObject()
             } finally {
+                cancellation?.dispose()
                 connection.disconnect()
             }
         }

@@ -450,7 +450,7 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(status, 202)
         _, response = self.rpc("tools/list")
         names = {tool["name"] for tool in response["result"]["tools"]}
-        self.assertTrue({"termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_model_test", "provider_chat", "composio_platform_configure", "run_start", "run_subscribe", "run_status", "run_cancel", "run_approve", "run_list"} <= names)
+        self.assertTrue({"termux_exec", "termux_command_approve", "read_log", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_model_test", "provider_chat", "composio_platform_configure", "run_start", "run_subscribe", "run_status", "run_cancel", "run_approve", "run_list"} <= names)
 
     def test_composio_platform_configuration_never_returns_install_token(self):
         with patch.object(mcp_server.composio_platform, "configure", return_value={"ok":True,"user_id":"codein_0123456789abcdef0123456789abcdef","reused":False}), \
@@ -678,11 +678,11 @@ class McpTransportTests(unittest.TestCase):
 
         approval = self.call_tool("termux_command_approve", {"command": command})
         self.assertTrue(approval.get("approved_once"))
+        approval_path=mcp_server.PERMISSIONS/(mcp_server.hashlib.sha256(command.encode()).hexdigest()+".json")
+        self.assertNotIn(command,approval_path.read_text(encoding="utf-8"))
 
-        def fake_popen(_command, cwd, stdout, stderr, env, start_new_session):
-            stdout.write(b"approved")
-            stderr.write(b"")
-            return SimpleNamespace(pid=12345, wait=lambda timeout=None: 0)
+        def fake_popen(_command, cwd, stdout, stderr, env, start_new_session, bufsize):
+            return SimpleNamespace(pid=12345, stdout=io.BytesIO(b"approved"), stderr=io.BytesIO(), wait=lambda timeout=None: 0)
         with patch.object(mcp_server.subprocess, "Popen", side_effect=fake_popen) as run_command:
             result = self.call_tool("termux_exec", {"command": command})
             run_command.assert_called_once()
@@ -692,6 +692,128 @@ class McpTransportTests(unittest.TestCase):
 
         denied_again = self.call_tool("termux_exec", {"command": command})
         self.assertTrue(denied_again.get("permission_required"))
+
+    def test_one_time_command_approval_is_consumed_atomically(self):
+        command="printf single-use-approval"
+        self.call_tool("termux_command_approve",{"command":command})
+        started=threading.Event(); release=threading.Event(); results=[]
+        def fake_popen(_command,cwd,stdout,stderr,env,start_new_session,bufsize):
+            started.set(); release.wait(3)
+            return SimpleNamespace(pid=12346,stdout=io.BytesIO(b"once"),stderr=io.BytesIO(),wait=lambda timeout=None:0)
+        def execute(): results.append(mcp_server.dispatch_mcp_tool("termux_exec",{"command":command}))
+        with patch.object(mcp_server.subprocess,"Popen",side_effect=fake_popen) as run_command:
+            thread=threading.Thread(target=execute); thread.start()
+            try:
+                self.assertTrue(started.wait(2))
+                second=mcp_server.dispatch_mcp_tool("termux_exec",{"command":command})
+            finally:
+                release.set(); thread.join(3)
+        self.assertTrue(second.get("permission_required"))
+        self.assertEqual(run_command.call_count,1)
+        self.assertEqual(results[0]["stdout"],"once")
+
+    def test_command_logs_are_redacted_bounded_and_readable(self):
+        command="printf command-log-test"
+        self.call_tool("termux_command_approve",{"command":command})
+        output=(b"Authorization: Bearer log-secret-token\n"
+            b"OPENAI_API_KEY=sk-prefixed-test\n"
+            b"AWS_SECRET_ACCESS_KEY=\"two word secret\"\n"
+            b"x"*250000)
+        def fake_popen(_command,cwd,stdout,stderr,env,start_new_session,bufsize):
+            return SimpleNamespace(pid=12347,stdout=io.BytesIO(output),stderr=io.BytesIO(b"warning"),wait=lambda timeout=None:0)
+        with patch.object(mcp_server.subprocess,"Popen",side_effect=fake_popen):
+            result=mcp_server.dispatch_mcp_tool("termux_exec",{"command":command})
+        self.assertTrue(result["truncated"])
+        self.assertNotIn("log-secret-token",json.dumps(result))
+        self.assertNotIn("sk-prefixed-test",json.dumps(result))
+        self.assertNotIn("two word secret",json.dumps(result))
+        self.assertNotIn("full_log_path",result)
+        page=mcp_server.dispatch_mcp_tool("read_log",{"log_id":result["log_id"],"offset":0,"limit":20000})
+        self.assertTrue(page["ok"])
+        self.assertNotIn("log-secret-token",page["content"])
+        self.assertNotIn("sk-prefixed-test",page["content"])
+        self.assertNotIn("two word secret",page["content"])
+        self.assertIn("[REDACTED]",page["content"])
+        self.assertLessEqual((mcp_server.ROOT/"logs"/"commands"/(result["log_id"]+".log")).stat().st_size,mcp_server.MAX_COMMAND_LOG_BYTES)
+
+    def test_cancelled_durable_approval_does_not_start_its_command(self):
+        command="printf must-not-run-after-cancel"
+        continuation=mcp_server.stash_pending_chat("openai","test-model","system","openai",[],
+            {"id":"tool-cancel","name":"termux_exec","args":{"command":command}},60)
+        control=mcp_server.DurableRunControl(); control.cancel()
+        approval=mcp_server.PERMISSIONS/(mcp_server.hashlib.sha256(command.encode()).hexdigest()+".json")
+        with patch.object(mcp_server.subprocess,"Popen") as run_command:
+            with self.assertRaises(mcp_server.RequestCancelled):
+                mcp_server.dispatch_mcp_tool("provider_chat_resume",{
+                    "continuation_id":continuation,"decision":"approve","_cancel":control
+                })
+        run_command.assert_not_called()
+        self.assertFalse(approval.exists())
+
+    def test_termux_exec_refuses_to_start_after_run_cancellation(self):
+        command="printf run-already-cancelled"
+        run_id="cancelled-command-spawn-test"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"CANCELLING","last_seq":0})
+        (directory/"events.jsonl").write_text("",encoding="utf-8")
+        self.call_tool("termux_command_approve",{"command":command,"always":True})
+        control=mcp_server.DurableRunControl(); control.cancel()
+        mcp_server.RUN_CONTROLS[run_id]=control
+        previous_run_id=getattr(mcp_server.RUN_THREAD_CONTEXT,"run_id",None)
+        mcp_server.RUN_THREAD_CONTEXT.run_id=run_id
+        try:
+            with patch.object(mcp_server.subprocess,"Popen") as run_command:
+                with self.assertRaises(mcp_server.RequestCancelled):
+                    mcp_server.dispatch_mcp_tool("termux_exec",{"command":command})
+            run_command.assert_not_called()
+        finally:
+            mcp_server.RUN_THREAD_CONTEXT.run_id=previous_run_id
+            mcp_server.RUN_CONTROLS.pop(run_id,None)
+
+    def test_durable_command_process_group_is_recorded_until_exit(self):
+        command="printf tracked-process"
+        run_id="tracked-command-process-test"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"RUNNING","last_seq":0})
+        (directory/"events.jsonl").write_text("",encoding="utf-8")
+        self.call_tool("termux_command_approve",{"command":command,"always":True})
+        control=mcp_server.DurableRunControl(); mcp_server.RUN_CONTROLS[run_id]=control
+        waiting=threading.Event(); release=threading.Event(); result=[]
+        def fake_popen(_command,cwd,stdout,stderr,env,start_new_session,bufsize):
+            def wait(timeout=None):
+                waiting.set(); release.wait(3); return 0
+            return SimpleNamespace(pid=24681,stdout=io.BytesIO(b"tracked"),stderr=io.BytesIO(),wait=wait)
+        def execute():
+            mcp_server.RUN_THREAD_CONTEXT.run_id=run_id
+            try: result.append(mcp_server.dispatch_mcp_tool("termux_exec",{"command":command}))
+            finally: mcp_server.RUN_THREAD_CONTEXT.run_id=None
+        with patch.object(mcp_server.subprocess,"Popen",side_effect=fake_popen):
+            thread=threading.Thread(target=execute); thread.start()
+            try:
+                self.assertTrue(waiting.wait(2))
+                self.assertEqual(mcp_server.get_run_status(run_id)["active_process_group"],24681)
+            finally:
+                release.set(); thread.join(3); mcp_server.RUN_CONTROLS.pop(run_id,None)
+        self.assertEqual(result[0]["stdout"],"tracked")
+        self.assertNotIn("active_process_group",mcp_server.get_run_status(run_id))
+
+    def test_legacy_exec_route_uses_the_mcp_approval_gate(self):
+        command="printf protected-route"
+        request=Request(self.url.replace("/mcp","/api/exec"),data=json.dumps({"command":command}).encode(),headers={
+            "Authorization":"Bearer mcp-test-token","Content-Type":"application/json"
+        },method="POST")
+        with urlopen(request,timeout=3) as response:
+            pending=json.loads(response.read().decode())
+        self.assertTrue(pending.get("permission_required"))
+        self.call_tool("termux_command_approve",{"command":command})
+        def fake_popen(_command,cwd,stdout,stderr,env,start_new_session,bufsize):
+            return SimpleNamespace(pid=12348,stdout=io.BytesIO(b"protected"),stderr=io.BytesIO(),wait=lambda timeout=None:0)
+        with patch.object(mcp_server.subprocess,"Popen",side_effect=fake_popen):
+            with urlopen(request,timeout=3) as response:
+                result=json.loads(response.read().decode())
+        self.assertEqual(result["stdout"],"protected")
 
     def test_auth_and_origin_validation(self):
         request = Request(self.url, data=b'{"jsonrpc":"2.0","id":1,"method":"ping"}', headers={
@@ -740,6 +862,92 @@ class McpTransportTests(unittest.TestCase):
         self.assertTrue(all(item["seq"]>1 for item in resumed))
         self.assertEqual(resumed[0]["seq"],2)
 
+    def test_durable_run_start_deduplicates_idempotent_retries(self):
+        started=threading.Event(); release=threading.Event()
+        def fake_chat(arguments,emit,cancel):
+            started.set(); release.wait(3)
+            return 200,{"ok":True,"content":"finished"}
+        request={"provider":"openai","model":"test-model","messages":[{"role":"user","content":"same task"}],"idempotency_key":"run-start-"+str(time.time_ns())}
+        with patch.object(mcp_server,"provider_chat",side_effect=fake_chat) as provider_chat:
+            try:
+                first=mcp_server.dispatch_mcp_tool("run_start",request)
+                self.assertTrue(started.wait(2))
+                retry=mcp_server.dispatch_mcp_tool("run_start",request)
+                conflict=mcp_server.dispatch_mcp_tool("run_start",{**request,"messages":[{"role":"user","content":"different task"}]})
+            finally:
+                release.set()
+            for _ in range(100):
+                if mcp_server.get_run_status(first["run_id"]).get("status")=="DONE": break
+                time.sleep(0.01)
+        self.assertEqual(first["run_id"],retry["run_id"])
+        self.assertTrue(retry["duplicate"])
+        self.assertFalse(conflict["ok"])
+        self.assertEqual(provider_chat.call_count,1)
+
+    def test_run_approval_can_pause_for_another_command(self):
+        run_id="approval-second-request"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        (directory/"events.jsonl").write_text("",encoding="utf-8")
+        continuation=mcp_server.stash_pending_chat("openai","test-model","","openai",[],
+            {"id":"tool-1","name":"unknown_test_tool","args":{}},60)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"AWAITING_APPROVAL","last_seq":0,
+            "pending_approval":{"call_id":continuation,"continuation_id":continuation,"command":"printf first"}})
+        def fake_chat(_arguments,emit,cancel):
+            emit({"type":"token","text":"still working"})
+            return 200,{"ok":True,"permission_required":True,"command":"printf second","continuation_id":"next-continuation"}
+        with patch.object(mcp_server,"provider_chat",side_effect=fake_chat):
+            result=mcp_server.dispatch_mcp_tool("run_approve",{"run_id":run_id,"call_id":continuation,"decision":"approve"})
+        status=mcp_server.get_run_status(run_id)
+        self.assertEqual(result["status"],"AWAITING_APPROVAL")
+        self.assertTrue(result["result"]["permission_required"])
+        self.assertEqual(result["result"]["continuation_id"],"next-continuation")
+        self.assertEqual(status["pending_approval"]["call_id"],"next-continuation")
+        events=mcp_server.read_run_events(run_id,0)["events"]
+        self.assertEqual(events[-1]["type"],"approval_required")
+        self.assertEqual(events[-1]["call_id"],"next-continuation")
+        self.assertNotIn("done",[item["type"] for item in events])
+
+    def test_run_approval_is_claimed_once(self):
+        run_id="approval-single-claim"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        (directory/"events.jsonl").write_text("",encoding="utf-8")
+        continuation=mcp_server.stash_pending_chat("openai","test-model","","openai",[],
+            {"id":"tool-1","name":"unknown_test_tool","args":{}},60)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"AWAITING_APPROVAL","last_seq":0,
+            "pending_approval":{"call_id":continuation,"continuation_id":continuation,"command":"printf once"}})
+        started=threading.Event(); release=threading.Event(); result=[]
+        def fake_chat(_arguments,emit,cancel):
+            started.set(); release.wait(3)
+            return 200,{"ok":True,"content":"finished"}
+        def approve():
+            result.append(mcp_server.dispatch_mcp_tool("run_approve",{"run_id":run_id,"call_id":continuation,"decision":"approve"}))
+        with patch.object(mcp_server,"provider_chat",side_effect=fake_chat):
+            thread=threading.Thread(target=approve); thread.start()
+            try:
+                self.assertTrue(started.wait(2))
+                with self.assertRaisesRegex(RuntimeError,"not awaiting approval"):
+                    mcp_server.dispatch_mcp_tool("run_approve",{"run_id":run_id,"call_id":continuation,"decision":"approve"})
+            finally:
+                release.set(); thread.join(3)
+        self.assertEqual(len(result),1)
+        self.assertEqual(mcp_server.get_run_status(run_id)["status"],"DONE")
+
+    def test_durable_event_append_recovers_stale_metadata_sequence(self):
+        run_id="durable-event-sequence-recovery"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"RUNNING","last_seq":1})
+        (directory/"events.jsonl").write_text(
+            json.dumps({"seq":1,"type":"status"})+"\n"+
+            json.dumps({"seq":2,"type":"token","text":"persisted before metadata"})+"\n",
+            encoding="utf-8"
+        )
+        event=mcp_server.append_run_event(run_id,{"type":"token","text":"next"})
+        self.assertEqual(event["seq"],3)
+        self.assertEqual(mcp_server.get_run_status(run_id)["last_seq"],3)
+
     def test_pending_approval_survives_memory_loss(self):
         cid=mcp_server.stash_pending_chat("openai","test-model","system","openai",[],
             {"id":"tool-1","name":"unknown_test_tool","args":{}},60)
@@ -760,6 +968,49 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(mcp_server.get_run_status(run_id)["status"],"INTERRUPTED")
         events=mcp_server.read_run_events(run_id,0)["events"]
         self.assertEqual(events[-1]["status"],"INTERRUPTED")
+
+    def test_bridge_restart_marks_resuming_run_interrupted(self):
+        run_id="restart-resuming-recovery-test"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        continuation=mcp_server.stash_pending_chat("openai","test-model","system","openai",[],
+            {"id":"tool-1","name":"unknown_test_tool","args":{}},60)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"RESUMING","last_seq":0,
+            "pending_approval":{"call_id":continuation,"continuation_id":continuation,"command":"printf pending"}})
+        (directory/"events.jsonl").write_text("",encoding="utf-8")
+        mcp_server.recover_agent_runs()
+        status=mcp_server.get_run_status(run_id)
+        self.assertEqual(status["status"],"INTERRUPTED")
+        self.assertIsNone(status["pending_approval"])
+        self.assertFalse((mcp_server.PENDING_ROOT/(continuation+".json")).exists())
+
+    def test_bridge_restart_marks_cancelling_run_interrupted(self):
+        run_id="restart-cancelling-recovery-test"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"CANCELLING","last_seq":0})
+        (directory/"events.jsonl").write_text("",encoding="utf-8")
+        mcp_server.recover_agent_runs()
+        status=mcp_server.get_run_status(run_id)
+        self.assertEqual(status["status"],"INTERRUPTED")
+        self.assertIn("cancellation",status["error"])
+        events=mcp_server.read_run_events(run_id,0)["events"]
+        self.assertEqual(events[-1]["status"],"INTERRUPTED")
+        self.assertIn("cancellation",events[-1]["reason"])
+
+    def test_bridge_restart_stops_recorded_command_group_before_interrupting(self):
+        run_id="restart-command-process-recovery-test"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"RUNNING","last_seq":0,
+            "active_process_group":24680})
+        (directory/"events.jsonl").write_text("",encoding="utf-8")
+        with patch.object(mcp_server,"terminate_recorded_process_group",return_value=True) as stop_group:
+            mcp_server.recover_agent_runs()
+        stop_group.assert_called_once_with(24680,run_id)
+        status=mcp_server.get_run_status(run_id)
+        self.assertEqual(status["status"],"INTERRUPTED")
+        self.assertNotIn("active_process_group",status)
 
     def test_provider_retries_503_with_retry_after_and_emits_event(self):
         error=HTTPError("https://provider.invalid",503,"busy",{"Retry-After":"0"},io.BytesIO(b"busy"))
@@ -799,4 +1050,3 @@ class McpTransportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
