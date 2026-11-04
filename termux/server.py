@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Codein local Termux bridge. Python standard library only."""
-import hashlib, json, os, subprocess, threading, time, uuid
+import hashlib, json, os, random, re, shutil, signal, subprocess, threading, time, uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,7 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
-SERVER_VERSION="1.6.0"
+SERVER_VERSION="1.7.0"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -27,6 +27,18 @@ PENDING_CANCELLATIONS={}
 ACTIVE_STREAMS_LOCK=threading.Lock()
 PENDING_CHATS={}
 PENDING_CHATS_LOCK=threading.Lock()
+RUNS_ROOT=ROOT/"runs"
+PENDING_ROOT=RUNS_ROOT/"pending"
+PENDING_APPROVAL_TTL=int(CONFIG.get("approval_ttl_seconds",86400))
+RUNS_ROOT.mkdir(parents=True,exist_ok=True)
+PENDING_ROOT.mkdir(parents=True,exist_ok=True)
+RUNS_ROOT.chmod(0o700)
+PENDING_ROOT.chmod(0o700)
+RUNS_LOCK=threading.RLock()
+RUN_CONTROLS={}
+RUN_PROCESSES={}
+RUN_THREAD_CONTEXT=threading.local()
+RUN_TERMINAL={"DONE","FAILED","CANCELLED","INTERRUPTED"}
 
 def stash_pending_chat(pid, model, system, kind, native, call, timeout):
     """Remember an interrupted provider turn so one approval resumes it."""
@@ -35,8 +47,13 @@ def stash_pending_chat(pid, model, system, kind, native, call, timeout):
         cutoff=time.time()-1800
         for key in [key for key,value in list(PENDING_CHATS.items()) if value.get("at",0)<cutoff]:
             PENDING_CHATS.pop(key,None)
-        PENDING_CHATS[continuation_id]={"pid":pid,"model":model,"system":system,"kind":kind,
+        state={"pid":pid,"model":model,"system":system,"kind":kind,
             "native":native,"call":call,"timeout":timeout,"at":time.time()}
+        PENDING_CHATS[continuation_id]=state
+        path=PENDING_ROOT/(continuation_id+".json")
+        tmp=path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(redact_sensitive(state),ensure_ascii=False)+"\n",encoding="utf-8")
+        tmp.chmod(0o600); os.replace(tmp,path)
     return continuation_id
 
 class StreamControl:
@@ -253,6 +270,12 @@ def mcp_tools_catalog():
         {"name":"provider_models_saved_list","description":"Query a provider model catalog using the API key already saved in the local credential vault.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)}},"required":["provider"]}},
         {"name":"provider_model_test","description":"Send one short text-generation probe to a single provider model. The optional test key is used only for this request and is never saved. This probe has no local tools.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"test_api_key":{"type":"string"}},"required":["provider","model"]}},
         {"name":"provider_chat_resume","description":"Resume a provider chat that paused for command approval: execute or deny the pending call, then continue the same turn to its final answer.","inputSchema":{"type":"object","properties":{"continuation_id":{"type":"string"},"decision":{"type":"string","enum":["approve","deny"]},"always":{"type":"boolean"}},"required":["continuation_id"]}},
+        {"name":"run_start","description":"Start a durable background agent run that survives client disconnects.","inputSchema":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object"}},"system":{"type":"string"},"timeout":{"type":"integer"},"total_timeout":{"type":"integer"},"max_turns":{"type":"integer"}},"required":["provider","model","messages"]}},
+        {"name":"run_subscribe","description":"Read durable run events after a sequence number; use SSE and Last-Event-ID to reconnect.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"},"after_seq":{"type":"integer"}},"required":["run_id"]}},
+        {"name":"run_status","description":"Read durable run state.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}},
+        {"name":"run_cancel","description":"Explicitly cancel a durable background run.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}},
+        {"name":"run_approve","description":"Approve or deny a persisted command approval for a run.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"},"call_id":{"type":"string"},"decision":{"type":"string","enum":["approve","deny"]},"always":{"type":"boolean"}},"required":["run_id","call_id","decision"]}},
+        {"name":"run_list","description":"List recent durable agent runs.","inputSchema":{"type":"object","properties":{}}},
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
         {"name":"opencode_manage","description":"Manage the optional local OpenCode API: install/start, check status, restart, or stop. This does not replace the selected Codein chat provider.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","start","status","restart","stop"]}},"required":["action"]}}
     ]
@@ -334,12 +357,44 @@ def dispatch_mcp_tool(name, args):
             except OSError: pass
         event("command_started",{"command":command[:500]}); start=time.monotonic()
         try:
-            run=subprocess.run(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),capture_output=True,text=True,timeout=timeout,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)})
-            result={"exit_code":run.returncode,"stdout":run.stdout[-100000:],"stderr":run.stderr[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
-        except subprocess.TimeoutExpired as exc:
-            result={"exit_code":124,"error":"Command timed out","stdout":str(exc.stdout or "")[-100000:],"stderr":str(exc.stderr or "")[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
+            log_dir=ROOT/"logs"/"commands"; log_dir.mkdir(parents=True,exist_ok=True)
+            command_id=uuid.uuid4().hex; stdout_path=log_dir/(command_id+".stdout.log"); stderr_path=log_dir/(command_id+".stderr.log")
+            timed_out=False; exit_code=0
+            with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
+                proc=subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),stdout=out,stderr=err,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)},start_new_session=True)
+                run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
+                if run_id: RUN_PROCESSES[run_id]=proc
+                try: exit_code=proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out=True
+                    try: os.killpg(proc.pid,signal.SIGTERM)
+                    except (ProcessLookupError,PermissionError): proc.terminate()
+                    try: proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try: os.killpg(proc.pid,signal.SIGKILL)
+                        except (ProcessLookupError,PermissionError): proc.kill()
+                        proc.wait()
+                    exit_code=124
+                finally:
+                    if run_id: RUN_PROCESSES.pop(run_id,None)
+            def head_tail(path,head_limit,tail_limit):
+                with path.open("rb") as stream:
+                    head=stream.read(head_limit).decode("utf-8",errors="replace")
+                    stream.seek(0,os.SEEK_END); size=stream.tell(); stream.seek(max(0,size-tail_limit))
+                    tail=stream.read(tail_limit).decode("utf-8",errors="replace")
+                    return head,tail,size
+            stdout_head,stdout_tail,stdout_size=head_tail(stdout_path,4000,16000)
+            _,stderr_tail,stderr_size=head_tail(stderr_path,0,8000)
+            full_log=log_dir/(command_id+".log")
+            with full_log.open("wb") as log:
+                log.write(b"=== STDOUT ===\n")
+                with stdout_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
+                log.write(b"\n=== STDERR ===\n")
+                with stderr_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
+            result={"exit_code":exit_code,"stdout":stdout_tail,"stderr":stderr_tail,"stdout_head":stdout_head,"stdout_tail":stdout_tail,"stderr_tail":stderr_tail,"truncated":stdout_size>20000 or stderr_size>8000,"full_log_path":str(full_log),"duration_ms":int((time.monotonic()-start)*1000)}
+            if timed_out: result["error"]="Command timed out"
         event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
-        return result
+        return redact_sensitive(result)
     if name=="agent_room_get":
         journal=EVENTS/"journal.jsonl"
         lines=journal.read_text(encoding="utf-8").splitlines()[-25:] if journal.exists() else []
@@ -411,12 +466,53 @@ def dispatch_mcp_tool(name, args):
         if status!=200 or not result.get("ok") or marker not in answer:
             raise RuntimeError("Model did not pass the live text-response test")
         return {"ok":True,"verified":True,"provider":pid,"model":model}
+    if name=="run_start": return start_agent_run(args)
+    if name=="run_subscribe": return read_run_events(str(args.get("run_id","")),int(args.get("after_seq",0)))
+    if name=="run_status": return get_run_status(str(args.get("run_id","")))
+    if name=="run_list": return list_agent_runs()
+    if name=="run_cancel":
+        rid=str(args.get("run_id","")); control=RUN_CONTROLS.get(rid)
+        if control is None: return {"ok":False,"error":"Run is not active"}
+        control.cancel()
+        proc=RUN_PROCESSES.get(rid)
+        if proc is not None:
+            try: os.killpg(proc.pid,signal.SIGTERM)
+            except (ProcessLookupError,PermissionError): pass
+            try: proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try: os.killpg(proc.pid,signal.SIGKILL)
+                except (ProcessLookupError,PermissionError): proc.kill()
+        append_run_event(rid,{"type":"status","status":"CANCELLING"})
+        return {"ok":True,"run_id":rid}
+    if name=="run_approve":
+        rid=str(args.get("run_id","")); meta=read_run_meta(rid); pending=meta.get("pending_approval") or {}
+        if meta.get("status")!="AWAITING_APPROVAL": raise RuntimeError("Run is not awaiting approval")
+        if str(args.get("call_id",""))!=str(pending.get("call_id","")): raise RuntimeError("Approval call_id does not match")
+        decision=str(args.get("decision","deny"))
+        if decision not in ("approve","deny"): raise ValueError("Invalid decision")
+        append_run_event(rid,{"type":"status","status":"RESUMING"})
+        previous_run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
+        RUN_THREAD_CONTEXT.run_id=rid
+        try:
+            result=dispatch_mcp_tool("provider_chat_resume",{"continuation_id":pending.get("continuation_id"),"decision":decision,"always":bool(args.get("always",False))})
+        finally:
+            RUN_THREAD_CONTEXT.run_id=previous_run_id
+        append_run_event(rid,{"type":"done" if result.get("ok") else "error","content":result.get("content",""),"error":result.get("error","")})
+        meta=read_run_meta(rid); meta["pending_approval"]=None; meta["status"]="DONE" if result.get("ok") else "FAILED"
+        meta["result"]=result.get("content",""); meta["error"]=result.get("error",""); write_run_meta(rid,meta)
+        return {"ok":bool(result.get("ok")),"run_id":rid,"result":result}
     if name=="provider_chat_resume":
         cid=str(args.get("continuation_id","")).strip()
         with PENDING_CHATS_LOCK:
             state=PENDING_CHATS.pop(cid,None)
+        pending_path=PENDING_ROOT/(cid+".json")
+        if state is None: state=readj(pending_path,None)
+        try: pending_path.unlink()
+        except OSError: pass
         if not state:
             raise RuntimeError("This approval request expired or was already used. Send the request again.")
+        if time.time()-float(state.get("at",0))>PENDING_APPROVAL_TTL:
+            raise RuntimeError("This approval request expired after 24 hours. Send the task again.")
         decision=str(args.get("decision","approve")).strip().lower()
         pending=state.get("call") or {}
         pending_name=str(pending.get("name",""))
@@ -626,6 +722,42 @@ def gemini_schema(schema):
         elif "items" in result: result["type"]="array"
     return result
 
+def provider_urlopen(request, timeout, emit=None, cancel=None, deadline=None):
+    delays=(1,2,4,8,16)
+    for attempt in range(5):
+        if cancel: cancel.check()
+        try: return urlopen(request,timeout=timeout)
+        except HTTPError as exc:
+            if exc.code not in (429,500,502,503,504) or attempt==4: raise
+            try: exc.close()
+            except Exception: pass
+            try: delay=max(0,min(30,float(exc.headers.get("Retry-After",""))))
+            except (TypeError,ValueError): delay=delays[attempt]+random.uniform(0,0.35)
+        except (URLError,TimeoutError):
+            if attempt==4: raise
+            delay=delays[attempt]+random.uniform(0,0.35)
+        if deadline is not None and time.monotonic()+delay>=deadline: raise TimeoutError("Provider retry budget exceeded")
+        if emit: emit({"type":"retry","attempt":attempt+1,"delay_seconds":round(delay,2)})
+        end=time.monotonic()+delay
+        while time.monotonic()<end:
+            if cancel: cancel.check()
+            time.sleep(min(0.2,end-time.monotonic()))
+    raise RuntimeError("Provider retry budget exhausted")
+
+def persist_run_messages(history):
+    run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
+    if not run_id: return
+    try:
+        path=run_dir(run_id)/"messages.json"
+        payload=readj(path,{})
+        payload["native_history"]=redact_sensitive(history)
+        tmp=path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        tmp.chmod(0o600)
+        os.replace(tmp,path)
+    except (OSError,ValueError):
+        pass
+
 def provider_chat(data, emit=None, cancel=None):
     pid=str(data.get("provider","")).strip().lower()
     provider=PROVIDERS.get(pid)
@@ -645,12 +777,13 @@ def provider_chat(data, emit=None, cancel=None):
         content=str(item.get("content",""))
         if content: clean.append({"role":role,"content":content[:50000]})
     system=str(data.get("system",""))[:30000]
-    timeout=max(10,min(int(data.get("timeout",120)),180))
-    deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",300)),300)) if emit else None
+    timeout=max(10,min(int(data.get("timeout",120)),300))
+    max_agent_turns=max(1,min(int(data.get("max_turns",40)),100))
+    deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",1800)),1800)) if emit else None
     model_probe=bool(data.get("model_probe"))
     resume=data.get("resume") if isinstance(data.get("resume"),dict) else None
     # Probes must not expose action tools or let a model trigger local side effects.
-    tool_catalog=[] if model_probe else [tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_chat_resume","provider_models_list","provider_models_saved_list","provider_model_test","credential_save","termux_command_approve","opencode_manage","composio_platform_configure")]
+    tool_catalog=[] if model_probe else [tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_chat_resume","provider_models_list","provider_models_saved_list","provider_model_test","credential_save","termux_command_approve","opencode_manage","composio_platform_configure","run_start","run_subscribe","run_status","run_cancel","run_approve","run_list")]
     try:
         if cancel: cancel.check()
         if provider["kind"]=="gemini":
@@ -666,7 +799,7 @@ def provider_chat(data, emit=None, cancel=None):
             method=":streamGenerateContent?alt=sse&key=" if emit else ":generateContent?key="
             url=provider_base_url(provider)+"/models/"+quote(model,safe="")+method+quote(api_key,safe="")
             headers={"Content-Type":"application/json"}
-            for attempt in range(9):
+            for attempt in range(max_agent_turns):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
@@ -675,7 +808,7 @@ def provider_chat(data, emit=None, cancel=None):
                 if system: payload["systemInstruction"]={"parts":[{"text":system}]}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
+                with tracked_response(cancel,provider_urlopen(request,request_timeout,emit=emit,cancel=cancel,deadline=deadline)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_gemini_stream(response,emit,deadline)
@@ -692,6 +825,7 @@ def provider_chat(data, emit=None, cancel=None):
                     answer=message.get("content","") if emit else "".join(str(part.get("text","")) for part in parts if isinstance(part,dict))
                     break
                 contents.append(model_content)
+                persist_run_messages(contents)
                 tool_responses=[]
                 for call in calls[:12]:
                     if cancel: cancel.check()
@@ -707,6 +841,7 @@ def provider_chat(data, emit=None, cancel=None):
                     if emit: emit({"type":"tool_result","name":tool_name,"summary":"Tool returned an error" if isinstance(tool_result,dict) and tool_result.get("error") else "Tool completed"})
                     tool_responses.append({"functionResponse":{"name":tool_name,"response":{"result":tool_result}}})
                 contents.append({"role":"user","parts":tool_responses})
+                persist_run_messages(contents)
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         elif provider["kind"]=="anthropic":
             system_parts=[system] if system else []
@@ -720,7 +855,7 @@ def provider_chat(data, emit=None, cancel=None):
             tools=[{"name":tool["name"],"description":tool["description"],"input_schema":tool["inputSchema"]} for tool in tool_catalog]
             url=provider_base_url(provider)+"/messages"
             headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"}
-            for attempt in range(9):
+            for attempt in range(max_agent_turns):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
@@ -729,7 +864,7 @@ def provider_chat(data, emit=None, cancel=None):
                 if system_parts: payload["system"]="\n\n".join(system_parts)
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
+                with tracked_response(cancel,provider_urlopen(request,request_timeout,emit=emit,cancel=cancel,deadline=deadline)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_anthropic_stream(response,emit,deadline)
@@ -742,6 +877,7 @@ def provider_chat(data, emit=None, cancel=None):
                     answer=message.get("content","") if emit else "".join(str(block.get("text","")) for block in blocks if isinstance(block,dict) and block.get("type")=="text")
                     break
                 msgs.append({"role":"assistant","content":blocks})
+                persist_run_messages(msgs)
                 results=[]
                 for call in tool_uses[:12]:
                     if cancel: cancel.check()
@@ -755,6 +891,7 @@ def provider_chat(data, emit=None, cancel=None):
                     if emit: emit({"type":"tool_result","id":str(call.get("id","")),"name":str(call.get("name","")),"summary":"Tool returned an error" if isinstance(result,dict) and result.get("error") else "Tool completed"})
                     results.append({"type":"tool_result","tool_use_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
                 msgs.append({"role":"user","content":results})
+                persist_run_messages(msgs)
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         else:
             msgs=[]
@@ -769,7 +906,7 @@ def provider_chat(data, emit=None, cancel=None):
             headers={"Content-Type":"application/json"}
             if api_key: headers["Authorization"]="Bearer "+api_key
             if pid=="pollinations": headers["Referer"]="https://github.com/aishervin/codein"
-            for attempt in range(9):
+            for attempt in range(max_agent_turns):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline:
                     return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
@@ -782,7 +919,7 @@ def provider_chat(data, emit=None, cancel=None):
                     payload.update({"tools":tools,"tool_choice":"auto"})
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
+                with tracked_response(cancel,provider_urlopen(request,request_timeout,emit=emit,cancel=cancel,deadline=deadline)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_openai_stream(response,emit,deadline)
@@ -795,6 +932,7 @@ def provider_chat(data, emit=None, cancel=None):
                     answer=str(message.get("content") or "")
                     break
                 msgs.append(message)
+                persist_run_messages(msgs)
                 for call in calls[:12]:
                     if cancel: cancel.check()
                     function=call.get("function") or {}
@@ -817,8 +955,15 @@ def provider_chat(data, emit=None, cancel=None):
                             summary="Tool completed"
                         emit({"type":"tool_result","id":str(call.get("id","")),"name":name,"summary":summary})
                     msgs.append({"role":"tool","tool_call_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
+                    persist_run_messages(msgs)
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         if not answer: return 502,{"ok":False,"error":"Provider returned an empty response","provider":pid,"model":model}
+        if provider["kind"]=="gemini":
+            contents.append({"role":"model","parts":[{"text":answer}]}); persist_run_messages(contents)
+        elif provider["kind"]=="anthropic":
+            msgs.append({"role":"assistant","content":answer}); persist_run_messages(msgs)
+        else:
+            msgs.append({"role":"assistant","content":answer}); persist_run_messages(msgs)
         event("provider_chat_completed",{"provider":pid,"model":model})
         if emit: emit({"type":"done","provider":pid,"model":model})
         return 200,{"ok":True,"provider":pid,"model":model,"content":answer}
@@ -849,11 +994,152 @@ def provider_chat(data, emit=None, cancel=None):
         if cancel and cancel.cancelled.is_set(): return 499,{"ok":False,"error":"Request cancelled"}
         return 502,{"ok":False,"error":"Provider request failed","error_type":type(exc).__name__}
 
+
+class DurableRunControl:
+    def __init__(self):
+        self.cancelled=threading.Event(); self.lock=threading.Lock(); self.response=None
+    def cancel(self):
+        self.cancelled.set()
+        with self.lock: response=self.response
+        if response is not None:
+            try: response.close()
+            except Exception: pass
+    def check(self):
+        if self.cancelled.is_set(): raise RequestCancelled()
+    def attach(self,response):
+        with self.lock:
+            if self.cancelled.is_set():
+                try: response.close()
+                except Exception: pass
+                raise RequestCancelled()
+            self.response=response
+    def detach(self,response):
+        with self.lock:
+            if self.response is response: self.response=None
+
+def run_dir(run_id):
+    if not run_id or len(run_id)>64 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in run_id): raise ValueError("Invalid run_id")
+    path=RUNS_ROOT/run_id
+    if not path.is_dir(): raise FileNotFoundError("Run not found")
+    return path
+
+def read_run_meta(run_id): return readj(run_dir(run_id)/"meta.json",{})
+
+def write_run_meta(run_id,meta):
+    path=run_dir(run_id)/"meta.json"; tmp=path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(redact_sensitive(meta),ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    tmp.chmod(0o600); os.replace(tmp,path)
+
+
+def redact_sensitive(value):
+    if isinstance(value,dict):
+        result={}
+        for key,item in value.items():
+            normalized=str(key).lower().replace("-","_")
+            if any(part in normalized for part in ("api_key","access_token","refresh_token","password","secret","authorization","consumer_key")):
+                result[key]="[REDACTED]"
+            else:
+                result[key]=redact_sensitive(item)
+        return result
+    if isinstance(value,list): return [redact_sensitive(item) for item in value]
+    if not isinstance(value,str): return value
+    patterns=(
+        (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s\"',;]+",r"\1[REDACTED]"),
+        (r"(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b\s*[:=]\s*)[^\s\"',;]+",r"\1[REDACTED]"),
+        (r"(?i)(x-api-key\s*:\s*)[^\s\"',;]+",r"\1[REDACTED]"),
+        (r"(?i)(--(?:token|api-key|password|secret)\s+)[^\s]+",r"\1[REDACTED]"),
+    )
+    for pattern,replacement in patterns: value=re.sub(pattern,replacement,value)
+    return value
+
+def append_run_event(run_id,payload):
+    with RUNS_LOCK:
+        directory=run_dir(run_id); meta=readj(directory/"meta.json",{})
+        seq=int(meta.get("last_seq",0))+1; item=redact_sensitive({"seq":seq,"at":now(),**payload})
+        with (directory/"events.jsonl").open("a",encoding="utf-8") as stream:
+            stream.write(json.dumps(item,ensure_ascii=False,separators=(",",":"))+"\n"); stream.flush(); os.fsync(stream.fileno())
+        meta["last_seq"]=seq; meta["updated_at"]=now(); write_run_meta(run_id,meta)
+        return item
+
+def read_run_events(run_id,after_seq=0):
+    directory=run_dir(run_id); items=[]; path=directory/"events.jsonl"
+    if path.exists():
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                try: item=json.loads(line)
+                except ValueError: continue
+                if int(item.get("seq",0))>max(0,after_seq): items.append(item)
+    meta=read_run_meta(run_id)
+    return {"ok":True,"run_id":run_id,"events":items,"last_seq":int(meta.get("last_seq",0))}
+
+def get_run_status(run_id): return {"ok":True,"run_id":run_id,**read_run_meta(run_id)}
+
+def list_agent_runs():
+    result=[]
+    for path in sorted((p for p in RUNS_ROOT.iterdir() if p.is_dir() and p.name!="pending"),key=lambda p:p.stat().st_mtime,reverse=True)[:50]:
+        meta=readj(path/"meta.json",{})
+        if meta: result.append({"run_id":path.name,"status":meta.get("status"),"provider":meta.get("provider"),"model":meta.get("model"),"last_seq":meta.get("last_seq",0),"updated_at":meta.get("updated_at")})
+    return {"ok":True,"runs":result}
+
+def start_agent_run(arguments):
+    args=dict(arguments or {}); args.pop("test_api_key",None)
+    if not isinstance(args.get("messages"),list) or not args["messages"]: raise ValueError("messages must be a non-empty array")
+    run_id=uuid.uuid4().hex; directory=RUNS_ROOT/run_id; directory.mkdir(mode=0o700)
+    meta={"run_id":run_id,"status":"RUNNING","provider":str(args.get("provider","")),"model":str(args.get("model","")),"created_at":now(),"updated_at":now(),"last_seq":0,"pending_approval":None}
+    write_run_meta(run_id,meta)
+    (directory/"messages.json").write_text(json.dumps(redact_sensitive({"request":args,"native_history":args.get("messages",[])},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    (directory/"messages.json").chmod(0o600)
+    control=DurableRunControl(); RUN_CONTROLS[run_id]=control
+    append_run_event(run_id,{"type":"status","status":"RUNNING"})
+    def worker():
+        RUN_THREAD_CONTEXT.run_id=run_id
+        def emit(payload):
+            control.check()
+            if payload.get("type") in ("approval_required","done"): return
+            append_run_event(run_id,payload)
+        try:
+            status,result=provider_chat(args,emit,control)
+            if result.get("permission_required"):
+                meta=read_run_meta(run_id); meta["status"]="AWAITING_APPROVAL"
+                meta["pending_approval"]={"call_id":str(result.get("continuation_id","")),"continuation_id":result.get("continuation_id"),"command":result.get("command","")}
+                write_run_meta(run_id,meta)
+                append_run_event(run_id,{"type":"approval_required","command":result.get("command",""),"call_id":meta["pending_approval"]["call_id"]})
+            elif status==200 and result.get("ok"):
+                append_run_event(run_id,{"type":"done","content":result.get("content","")})
+                meta=read_run_meta(run_id); meta["status"]="DONE"; meta["result"]=result.get("content",""); write_run_meta(run_id,meta)
+            else:
+                error_text=result.get("error","Run failed")
+                append_run_event(run_id,{"type":"error","error":error_text})
+                meta=read_run_meta(run_id); meta["status"]="CANCELLED" if status==499 else "FAILED"; meta["error"]=error_text; write_run_meta(run_id,meta)
+        except RequestCancelled:
+            append_run_event(run_id,{"type":"status","status":"CANCELLED"})
+            meta=read_run_meta(run_id); meta["status"]="CANCELLED"; write_run_meta(run_id,meta)
+        except Exception as exc:
+            error_type=type(exc).__name__
+            append_run_event(run_id,{"type":"error","error":error_type})
+            meta=read_run_meta(run_id); meta["status"]="FAILED"; meta["error"]=error_type; write_run_meta(run_id,meta)
+        finally:
+            RUN_PROCESSES.pop(run_id,None)
+            RUN_THREAD_CONTEXT.run_id=None
+            RUN_CONTROLS.pop(run_id,None)
+    threading.Thread(target=worker,name="codein-run-"+run_id[:8],daemon=True).start()
+    return {"ok":True,"run_id":run_id,"status":"RUNNING"}
+
+def recover_agent_runs():
+    for path in RUNS_ROOT.iterdir():
+        if not path.is_dir() or path.name=="pending": continue
+        meta=readj(path/"meta.json",{})
+        if meta.get("status")=="RUNNING":
+            append_run_event(path.name,{"type":"status","status":"INTERRUPTED","reason":"Bridge restarted"})
+            meta=readj(path/"meta.json",meta); meta["status"]="INTERRUPTED"; meta["updated_at"]=now(); write_run_meta(path.name,meta)
+
 def readj(p, fallback):
     try: return json.loads(p.read_text(encoding="utf-8"))
     except (OSError,ValueError): return fallback
 def event(kind,data):
-    with (EVENTS/"journal.jsonl").open("a",encoding="utf-8") as f: f.write(json.dumps({"at":now(),"kind":kind,"data":data},ensure_ascii=False)+"\n")
+    with (EVENTS/"journal.jsonl").open("a",encoding="utf-8") as f: f.write(json.dumps({"at":now(),"kind":kind,"data":redact_sensitive(data)},ensure_ascii=False)+"\n")
+
+recover_agent_runs()
 
 def probe_links():
     """Return the parallel connection set recorded by codein-links, probed concurrently."""
@@ -946,6 +1232,27 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(frame)
         self.wfile.flush()
 
+    def handle_mcp_run_subscribe(self, request_id, args):
+        run_id=str(args.get("run_id",""))
+        try: run_dir(run_id)
+        except Exception as exc: return self.mcp_error(request_id,-32602,str(exc))
+        after_seq=max(int(args.get("after_seq",0)),int(self.headers.get("Last-Event-ID","0") or 0))
+        self.send_response(200); self.send_header("Content-Type","text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control","no-cache, no-transform"); self.send_header("X-Accel-Buffering","no"); self.end_headers()
+        last_heartbeat=time.monotonic()
+        try:
+            while True:
+                batch=read_run_events(run_id,after_seq)
+                for item in batch["events"]:
+                    frame=("id: "+str(item["seq"])+"\nevent: codein\ndata: "+json.dumps(item,ensure_ascii=False,separators=(",",":"))+"\n\n").encode()
+                    self.wfile.write(frame); self.wfile.flush(); after_seq=int(item["seq"])
+                meta=read_run_meta(run_id)
+                if meta.get("status") in RUN_TERMINAL and after_seq>=int(meta.get("last_seq",0)): break
+                if time.monotonic()-last_heartbeat>=15:
+                    self.wfile.write(b": heartbeat\n\n"); self.wfile.flush(); last_heartbeat=time.monotonic()
+                time.sleep(0.5)
+        except (BrokenPipeError,ConnectionResetError): pass
+
     def handle_mcp_provider_chat(self, request_id, params):
         request_key=str(request_id)
         control=register_stream(request_key)
@@ -1021,6 +1328,8 @@ class Handler(BaseHTTPRequestHandler):
             name=str(params.get("name","")); args=params.get("arguments") or {}
             if name=="provider_chat" and "text/event-stream" in self.headers.get("Accept",""):
                 return self.handle_mcp_provider_chat(request_id,params)
+            if name=="run_subscribe" and "text/event-stream" in self.headers.get("Accept",""):
+                return self.handle_mcp_run_subscribe(request_id,params.get("arguments") or {})
             try:
                 result=dispatch_mcp_tool(name,args)
                 return self.mcp_result(request_id,{"content":[{"type":"text","text":json.dumps(result,ensure_ascii=False)}],"isError":False})
@@ -1119,3 +1428,5 @@ if __name__ == "__main__":
     print(f"[Codein] Workspace: {WORKSPACE}")
     print("[Codein] Ctrl+C to stop.")
     ThreadingHTTPServer(("127.0.0.1",PORT),Handler).serve_forever()
+
+

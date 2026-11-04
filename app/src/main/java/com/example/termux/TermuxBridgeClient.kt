@@ -12,6 +12,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.ensureActive
 
 /**
  * Client for the user's own Termux Agent Room.
@@ -45,13 +47,13 @@ class TermuxBridgeClient(context: Context) {
         val tools = mcpRequest("tools/list", JSONObject())
         val toolArray = tools.optJSONArray("tools") ?: JSONArray()
         val toolNames = (0 until toolArray.length()).mapNotNull { toolArray.optJSONObject(it)?.optString("name") }.toSet()
-        val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_model_test", "provider_chat", "composio_platform_configure", "composio_tools_refresh")
+        val requiredTools = setOf("termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_model_test", "provider_chat", "composio_platform_configure", "composio_tools_refresh", "run_start", "run_subscribe", "run_status", "run_cancel", "run_approve", "run_list")
         val missing = requiredTools - toolNames
         check(missing.isEmpty()) {
             "پل MCP ترموکس قدیمی است (ابزارهای لازم را ندارد). از تنظیمات، تب اتصال Termux، دستور نصب/به‌روزرسانی را کپی و در Termux اجرا کن."
         }
         val serverVersion = init.optJSONObject("serverInfo")?.optString("version").orEmpty()
-        check(versionAtLeast(serverVersion, "1.3.0")) {
+        check(versionAtLeast(serverVersion, "1.7.0")) {
             "نسخهٔ پل MCP ترموکس قدیمی است ($serverVersion). از تنظیمات، تب اتصال Termux، دستور نصب/به‌روزرسانی را کپی و در Termux اجرا کن؛ کلیدها و توکن قبلی حفظ می‌شوند."
         }
         return JSONObject()
@@ -150,9 +152,20 @@ class TermuxBridgeClient(context: Context) {
     }
 
     /** Resume a provider turn that paused for command approval; returns the final answer. */
+    /** Resume a durable run approval; legacy continuation IDs remain supported. */
     suspend fun resumeChat(continuationId: String, decision: String, always: Boolean = false): JSONObject {
         require(continuationId.isNotBlank()) { "Missing approval continuation" }
         require(decision in setOf("approve", "deny")) { "Invalid approval decision" }
+        if (continuationId.contains("|")) {
+            val parts = continuationId.split("|", limit = 2)
+            require(parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) { "Invalid durable approval ID" }
+            val response = mcpTool("run_approve", JSONObject()
+                .put("run_id", parts[0])
+                .put("call_id", parts[1])
+                .put("decision", decision)
+                .put("always", always), 300)
+            return response.optJSONObject("result") ?: response
+        }
         return mcpTool("provider_chat_resume", JSONObject()
             .put("continuation_id", continuationId)
             .put("decision", decision)
@@ -177,7 +190,7 @@ class TermuxBridgeClient(context: Context) {
         return result
     }
 
-    /** Stream provider chat and MCP tool progress over the MCP Streamable HTTP transport. */
+    /** Start a durable run, then reconnect to its sequenced event log until completion or approval. */
     @OptIn(InternalCoroutinesApi::class)
     suspend fun chatStream(
         provider: String,
@@ -185,129 +198,189 @@ class TermuxBridgeClient(context: Context) {
         messages: JSONArray,
         system: String,
         onEvent: suspend (JSONObject) -> Unit
-    ): JSONObject {
-        return withContext(Dispatchers.IO) {
-            check(bearerToken.isNotBlank()) { "توکن پل MCP ترموکس وارد نشده است." }
-            val requestId = UUID.randomUUID().toString()
-            val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 8_000
-                readTimeout = 190_000
-                setRequestProperty("Authorization", "Bearer " + bearerToken)
-                setRequestProperty("MCP-Protocol-Version", "2025-03-26")
-                setRequestProperty("Accept", "application/json, text/event-stream")
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                doOutput = true
-            }
-            val requestJob = currentCoroutineContext()[Job]
-            val cancellation = requestJob?.invokeOnCompletion(onCancelling = true) { cause ->
-                connection.disconnect()
-                if (cause is CancellationException) {
-                    Thread {
-                        val cancelConnection = runCatching {
-                            (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
-                                requestMethod = "POST"
-                                connectTimeout = 2_000
-                                readTimeout = 2_000
-                                setRequestProperty("Authorization", "Bearer " + bearerToken)
-                                setRequestProperty("MCP-Protocol-Version", "2025-03-26")
-                                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                                doOutput = true
-                            }
-                        }.getOrNull()
+    ): JSONObject = withContext(Dispatchers.IO) {
+        check(bearerToken.isNotBlank()) { "توکن پل MCP ترموکس وارد نشده است." }
+        val runStart = mcpTool("run_start", JSONObject()
+            .put("provider", provider)
+            .put("model", model)
+            .put("messages", messages)
+            .put("system", system)
+            .put("timeout", 120)
+            .put("total_timeout", 1800)
+            .put("max_turns", 40), 45)
+        val runId = runStart.optString("run_id")
+        check(runId.isNotBlank()) { "پل نتوانست اجرای پایدار را ایجاد کند." }
+        val activeRun = AtomicReference(runId)
+        val activeConnection = AtomicReference<HttpURLConnection?>(null)
+        val requestJob = currentCoroutineContext()[Job]
+        val cancellation = requestJob?.invokeOnCompletion(onCancelling = true) { cause ->
+            activeConnection.getAndSet(null)?.disconnect()
+            if (cause is CancellationException) {
+                Thread {
+                    runCatching {
+                        val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
+                            requestMethod = "POST"
+                            connectTimeout = 2_000
+                            readTimeout = 2_000
+                            setRequestProperty("Authorization", "Bearer " + bearerToken)
+                            setRequestProperty("MCP-Protocol-Version", "2025-03-26")
+                            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                            doOutput = true
+                        }
                         try {
-                            cancelConnection?.outputStream?.use {
-                                val notice = JSONObject()
-                                    .put("jsonrpc", "2.0")
-                                    .put("method", "notifications/cancelled")
-                                    .put("params", JSONObject().put("requestId", requestId).put("reason", "User stopped response"))
-                                it.write(notice.toString().toByteArray(Charsets.UTF_8))
-                            }
-                            cancelConnection?.responseCode
-                        } catch (_: Exception) {
-                        } finally {
-                            cancelConnection?.disconnect()
-                        }
-                    }.apply { isDaemon = true; start() }
+                            val payload = JSONObject()
+                                .put("jsonrpc", "2.0")
+                                .put("id", UUID.randomUUID().toString())
+                                .put("method", "tools/call")
+                                .put("params", JSONObject()
+                                    .put("name", "run_cancel")
+                                    .put("arguments", JSONObject().put("run_id", activeRun.get())))
+                            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                            connection.responseCode
+                        } finally { connection.disconnect() }
+                    }
+                }.apply { isDaemon = true; start() }
+            }
+        }
+        val answer = StringBuilder()
+        var lastSeq = 0L
+        var retryDelay = 1L
+        var finalResult: JSONObject? = null
+
+        suspend fun publish(event: JSONObject) {
+            val seq = event.optLong("seq", 0L)
+            if (seq > 0L && seq <= lastSeq) return
+            if (seq > 0L) lastSeq = seq
+            when (event.optString("type")) {
+                "token" -> answer.append(event.optString("text"))
+                "approval_required" -> {
+                    val callId = event.optString("call_id")
+                    if (callId.isNotBlank()) {
+                        finalResult = JSONObject()
+                            .put("ok", true)
+                            .put("permission_required", true)
+                            .put("command", event.optString("command"))
+                            .put("continuation_id", runId + "|" + callId)
+                            .put("run_id", runId)
+                    }
+                }
+                "done" -> if (event.has("content")) {
+                    finalResult = JSONObject()
+                        .put("ok", true)
+                        .put("provider", provider)
+                        .put("model", model)
+                        .put("content", event.optString("content").ifBlank { answer.toString() })
+                        .put("run_id", runId)
+                }
+                "error" -> finalResult = JSONObject()
+                    .put("ok", false)
+                    .put("error", event.optString("error").ifBlank { "اجرای ایجنت ناموفق بود." })
+                    .put("run_id", runId)
+                "status" -> if (event.optString("status") == "INTERRUPTED") {
+                    finalResult = JSONObject().put("ok", false)
+                        .put("error", "پل هنگام اجرای کار راه‌اندازی مجدد شد؛ اجرای قبلی برای بازیابی نگهداری شده است.")
+                        .put("run_id", runId)
                 }
             }
-            try {
-                val arguments = JSONObject()
-                    .put("provider", provider)
-                    .put("model", model)
-                    .put("messages", messages)
-                    .put("system", system)
-                    .put("timeout", 120)
-                val payload = JSONObject()
-                    .put("jsonrpc", "2.0")
-                    .put("id", requestId)
-                    .put("method", "tools/call")
-                    .put("params", JSONObject()
-                        .put("name", "provider_chat")
-                        .put("arguments", arguments)
-                        .put("_meta", JSONObject().put("progressToken", requestId)))
-                connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-                val status = connection.responseCode
-                if (status !in 200..299) {
-                    val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-                    throw IllegalStateException("MCP HTTP $status: " + detail.take(700))
+            withContext(Dispatchers.Main) { onEvent(event) }
+        }
+
+        try {
+            while (finalResult == null) {
+                currentCoroutineContext().ensureActive()
+                val connection = (URL(baseUrl + "/mcp").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 8_000
+                    readTimeout = 45_000
+                    setRequestProperty("Authorization", "Bearer " + bearerToken)
+                    setRequestProperty("MCP-Protocol-Version", "2025-03-26")
+                    setRequestProperty("Accept", "text/event-stream")
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("Last-Event-ID", lastSeq.toString())
+                    doOutput = true
                 }
-                check(connection.contentType?.contains("text/event-stream", ignoreCase = true) == true) {
-                    "پل MCP ترموکس از استریم استاندارد پشتیبانی نمی‌کند؛ آن را با دستور تب سرویس‌ها به‌روزرسانی کن."
-                }
-                val answer = StringBuilder()
-                var finalResult: JSONObject? = null
-                connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                    val dataLines = mutableListOf<String>()
-                    suspend fun dispatchFrame() {
-                        if (dataLines.isEmpty()) return
-                        val frame = runCatching { JSONObject(dataLines.joinToString("\n")) }.getOrNull()
-                        dataLines.clear()
-                        if (frame == null) return
-                        if (frame.optString("method") == "notifications/message") {
-                            val event = frame.optJSONObject("params")?.optJSONObject("data") ?: return
-                            when (event.optString("type")) {
-                                "token" -> answer.append(event.optString("text"))
-                                "error" -> throw IllegalStateException(
-                                    listOf(event.optString("error"), event.optString("detail"))
-                                        .filter(String::isNotBlank)
-                                        .joinToString(": ")
-                                        .ifBlank { "پاسخ مدل ناموفق بود." }
-                                        .take(700)
-                                )
-                            }
-                            withContext(Dispatchers.Main) { onEvent(event) }
-                        } else if (frame.optString("id") == requestId) {
-                            frame.optJSONObject("error")?.let { throw IllegalStateException(it.optString("message").ifBlank { "درخواست MCP ناموفق بود." }) }
-                            val result = frame.optJSONObject("result") ?: JSONObject()
-                            val content = result.optJSONArray("content")?.optJSONObject(0)?.optString("text").orEmpty()
-                            if (result.optBoolean("isError")) {
-                                val detail = runCatching { JSONObject(content) }.getOrNull()
-                                if (detail?.optString("error") == "missing_api_key") {
-                                    throw MissingProviderCredential(detail.optString("credential_name"), detail.optString("provider_name"))
+                activeConnection.set(connection)
+                try {
+                    val payload = JSONObject()
+                        .put("jsonrpc", "2.0")
+                        .put("id", UUID.randomUUID().toString())
+                        .put("method", "tools/call")
+                        .put("params", JSONObject()
+                            .put("name", "run_subscribe")
+                            .put("arguments", JSONObject().put("run_id", runId).put("after_seq", lastSeq)))
+                    connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                    val status = connection.responseCode
+                    if (status !in 200..299) {
+                        val detail = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                        throw IllegalStateException("MCP run stream HTTP $status: " + detail.take(500))
+                    }
+                    check(connection.contentType?.contains("text/event-stream", ignoreCase = true) == true) {
+                        "پل Termux استریم پایدار Run را پشتیبانی نمی‌کند؛ آن را به‌روزرسانی کن."
+                    }
+                    connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                        val dataLines = mutableListOf<String>()
+                        var frameSeq = 0L
+                        suspend fun dispatchFrame() {
+                            if (dataLines.isEmpty()) return
+                            val event = runCatching { JSONObject(dataLines.joinToString("\n")) }.getOrNull()
+                            dataLines.clear()
+                            if (event != null) publish(event)
+                        }
+                        while (finalResult == null) {
+                            val line = reader.readLine() ?: break
+                            when {
+                                line.startsWith("id:") -> frameSeq = line.removePrefix("id:").trim().toLongOrNull() ?: 0L
+                                line.startsWith("data:") -> dataLines += line.removePrefix("data:").trimStart()
+                                line.isEmpty() -> {
+                                    if (dataLines.isNotEmpty()) {
+                                        if (frameSeq > 0L) {
+                                            val parsed = runCatching { JSONObject(dataLines.joinToString("\n")) }.getOrNull()
+                                            if (parsed != null && !parsed.has("seq")) parsed.put("seq", frameSeq)
+                                            if (parsed != null) publish(parsed)
+                                            dataLines.clear()
+                                        } else dispatchFrame()
+                                    }
                                 }
-                                val message = detail?.optString("error").orEmpty().ifBlank { content.take(500) }
-                                throw IllegalStateException(message)
-                            }
-                            finalResult = runCatching { JSONObject(content) }.getOrElse {
-                                JSONObject().put("ok", true).put("provider", provider).put("model", model).put("content", content)
                             }
                         }
+                        if (dataLines.isNotEmpty() && finalResult == null) dispatchFrame()
                     }
-                    while (finalResult == null) {
-                        val line = reader.readLine() ?: break
-                        when {
-                            line.isEmpty() -> dispatchFrame()
-                            line.startsWith("data:") -> dataLines += line.removePrefix("data:").trimStart()
-                        }
-                    }
-                    if (dataLines.isNotEmpty()) dispatchFrame()
+                    retryDelay = 1L
+                } finally {
+                    activeConnection.compareAndSet(connection, null)
+                    connection.disconnect()
                 }
-                finalResult ?: error("استریم MCP پیش از پایان پاسخ قطع شد.")
-            } finally {
-                cancellation?.dispose()
-                connection.disconnect()
+
+                if (finalResult == null) {
+                    val status = runCatching { mcpTool("run_status", JSONObject().put("run_id", runId), 10) }.getOrNull()
+                    when (status?.optString("status")) {
+                        "DONE" -> finalResult = JSONObject().put("ok", true).put("provider", provider)
+                            .put("model", model).put("content", status.optString("result", answer.toString())).put("run_id", runId)
+                        "FAILED", "CANCELLED" -> finalResult = JSONObject().put("ok", false)
+                            .put("error", status.optString("error").ifBlank { status.optString("status") }).put("run_id", runId)
+                        "AWAITING_APPROVAL" -> {
+                            val pending = status.optJSONObject("pending_approval") ?: JSONObject()
+                            val callId = pending.optString("call_id")
+                            if (callId.isNotBlank()) finalResult = JSONObject().put("ok", true)
+                                .put("permission_required", true).put("command", pending.optString("command"))
+                                .put("continuation_id", runId + "|" + callId).put("run_id", runId)
+                        }
+                        "INTERRUPTED" -> finalResult = JSONObject().put("ok", false)
+                            .put("error", "پل هنگام اجرای کار راه‌اندازی مجدد شد؛ اجرای قبلی برای بازیابی نگهداری شده است.")
+                            .put("run_id", runId)
+                    }
+                }
+                if (finalResult == null) {
+                    Thread.sleep(retryDelay * 1000L)
+                    retryDelay = (retryDelay * 2L).coerceAtMost(16L)
+                }
             }
+            finalResult ?: error("اجرای پایدار بدون نتیجه پایان یافت.")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } finally {
+            cancellation?.dispose()
+            activeConnection.getAndSet(null)?.disconnect()
         }
     }
 
