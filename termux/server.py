@@ -387,9 +387,9 @@ def dispatch_mcp_tool(name, args):
             _,stderr_tail,stderr_size=head_tail(stderr_path,0,8000)
             full_log=log_dir/(command_id+".log")
             with full_log.open("wb") as log:
-                log.write(b"=== STDOUT ===\\n")
+                log.write(b"=== STDOUT ===\n")
                 with stdout_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
-                log.write(b"\\n=== STDERR ===\\n")
+                log.write(b"\n=== STDERR ===\n")
                 with stderr_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
             result={"exit_code":exit_code,"stdout":stdout_tail,"stderr":stderr_tail,"stdout_head":stdout_head,"stdout_tail":stdout_tail,"stderr_tail":stderr_tail,"truncated":stdout_size>20000 or stderr_size>8000,"full_log_path":str(full_log),"duration_ms":int((time.monotonic()-start)*1000)}
             if timed_out: result["error"]="Command timed out"
@@ -1005,10 +1005,10 @@ def redact_sensitive(value):
     if isinstance(value,list): return [redact_sensitive(item) for item in value]
     if not isinstance(value,str): return value
     patterns=(
-        (r"(?i)(authorization\\s*[:=]\\s*bearer\\s+)[^\\s\"',;]+",r"\\1[REDACTED]"),
+        (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s\"',;]+",r"\1[REDACTED]"),
         (r"(?i)(\\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\\b\\s*[:=]\\s*)[^\\s\"',;]+",r"\\1[REDACTED]"),
-        (r"(?i)(x-api-key\\s*:\\s*)[^\\s\"',;]+",r"\\1[REDACTED]"),
-        (r"(?i)(--(?:token|api-key|password|secret)\\s+)[^\\s]+",r"\\1[REDACTED]"),
+        (r"(?i)(x-api-key\s*:\s*)[^\s\"',;]+",r"\1[REDACTED]"),
+        (r"(?i)(--(?:token|api-key|password|secret)\s+)[^\s]+",r"\1[REDACTED]"),
     )
     for pattern,replacement in patterns: value=re.sub(pattern,replacement,value)
     return value
@@ -1048,7 +1048,7 @@ def start_agent_run(arguments):
     run_id=uuid.uuid4().hex; directory=RUNS_ROOT/run_id; directory.mkdir(mode=0o700)
     meta={"run_id":run_id,"status":"RUNNING","provider":str(args.get("provider","")),"model":str(args.get("model","")),"created_at":now(),"updated_at":now(),"last_seq":0,"pending_approval":None}
     write_run_meta(run_id,meta)
-    (directory/"messages.json").write_text(json.dumps({"request":args,"native_history":args.get("messages",[])},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    (directory/"messages.json").write_text(json.dumps(redact_sensitive({"request":args,"native_history":args.get("messages",[])},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (directory/"messages.json").chmod(0o600)
     control=DurableRunControl(); RUN_CONTROLS[run_id]=control
     append_run_event(run_id,{"type":"status","status":"RUNNING"})
@@ -1098,7 +1098,7 @@ def readj(p, fallback):
     try: return json.loads(p.read_text(encoding="utf-8"))
     except (OSError,ValueError): return fallback
 def event(kind,data):
-    with (EVENTS/"journal.jsonl").open("a",encoding="utf-8") as f: f.write(json.dumps({"at":now(),"kind":kind,"data":data},ensure_ascii=False)+"\n")
+    with (EVENTS/"journal.jsonl").open("a",encoding="utf-8") as f: f.write(json.dumps({"at":now(),"kind":kind,"data":redact_sensitive(data)},ensure_ascii=False)+"\n")
 
 recover_agent_runs()
 
@@ -1205,12 +1205,12 @@ class Handler(BaseHTTPRequestHandler):
             while True:
                 batch=read_run_events(run_id,after_seq)
                 for item in batch["events"]:
-                    frame=("id: "+str(item["seq"])+"\\nevent: codein\\ndata: "+json.dumps(item,ensure_ascii=False,separators=(",",":"))+"\\n\\n").encode()
+                    frame=("id: "+str(item["seq"])+"\nevent: codein\ndata: "+json.dumps(item,ensure_ascii=False,separators=(",",":"))+"\n\n").encode()
                     self.wfile.write(frame); self.wfile.flush(); after_seq=int(item["seq"])
                 meta=read_run_meta(run_id)
                 if meta.get("status") in RUN_TERMINAL and after_seq>=int(meta.get("last_seq",0)): break
                 if time.monotonic()-last_heartbeat>=15:
-                    self.wfile.write(b": heartbeat\\n\\n"); self.wfile.flush(); last_heartbeat=time.monotonic()
+                    self.wfile.write(b": heartbeat\n\n"); self.wfile.flush(); last_heartbeat=time.monotonic()
                 time.sleep(0.5)
         except (BrokenPipeError,ConnectionResetError): pass
 
