@@ -3,25 +3,96 @@ set -euo pipefail
 BRANCH="${CODEIN_BRANCH:-main}"
 RAW="https://raw.githubusercontent.com/aishervin/codein/$BRANCH"
 ROOT="$HOME/.codein"
-command -v pkg >/dev/null 2>&1 || { echo "Run this inside Termux." >&2; exit 1; }
+
+# Keep logs clean while making interactive Termux installs easier to follow.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_CYAN=$'\033[36m'
+  C_BLUE=$'\033[34m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_RED=$'\033[31m'
+  C_WHITE=$'\033[97m'
+else
+  C_RESET=''
+  C_BOLD=''
+  C_CYAN=''
+  C_BLUE=''
+  C_GREEN=''
+  C_YELLOW=''
+  C_RED=''
+  C_WHITE=''
+fi
+
+codein_banner() {
+  printf '\n%b' "$C_CYAN$C_BOLD"
+  printf '  +--------------------------------------------------+\n'
+  printf '%b' "$C_WHITE$C_BOLD"
+  printf '  |                CODEIN / TERMUX                  |\n'
+  printf '%b' "$C_BLUE"
+  printf '  |        Local Agent Room and MCP Bridge          |\n'
+  printf '%b' "$C_CYAN$C_BOLD"
+  printf '  +--------------------------------------------------+\n'
+  printf '%b\n\n' "$C_RESET"
+}
+
+codein_step() {
+  printf '\n%b[STEP]%b %s\n' "$C_BLUE$C_BOLD" "$C_RESET" "$*"
+}
+
+codein_info() {
+  printf '%b[INFO]%b %s\n' "$C_CYAN" "$C_RESET" "$*"
+}
+
+codein_success() {
+  printf '%b[ OK ]%b %s\n' "$C_GREEN$C_BOLD" "$C_RESET" "$*"
+}
+
+codein_warn() {
+  printf '%b[WARN]%b %s\n' "$C_YELLOW$C_BOLD" "$C_RESET" "$*"
+}
+
+codein_error() {
+  printf '%b[FAIL]%b %s\n' "$C_RED$C_BOLD" "$C_RESET" "$*" >&2
+}
+
+on_error() {
+  local status=$?
+  trap - ERR
+  codein_error "Setup stopped with exit code $status. Review the output above."
+  exit "$status"
+}
+trap on_error ERR
+
+codein_banner
+codein_step "1/5  Preparing the Termux runtime"
+command -v pkg >/dev/null 2>&1 || { codein_error "Run this inside Termux."; exit 1; }
 mkdir -p "$ROOT"/{workspace,agents,keys,sessions,events,skills,tools,logs,bin,docs}
 chmod 700 "$ROOT" "$ROOT/keys"
-echo "[Codein] Preparing Termux runtime..."
+codein_info "Updating Termux packages..."
 pkg update -y
 pkg install -y python git openssh curl
+codein_success "Required packages are ready."
 
 # Validate the full update before replacing any installed bridge files.
+codein_step "2/5  Downloading bridge files"
 STAGE="$(mktemp -d "$ROOT/.update.XXXXXX")"
 cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
+CODEIN_FETCHED=0
+CODEIN_FETCH_TOTAL=17
 fetch() {
   local remote target staged
   remote="$1"
   target="$2"
   staged="$STAGE/$remote"
+  CODEIN_FETCHED=$((CODEIN_FETCHED + 1))
+  printf '\n%b[DOWNLOAD %02d/%02d]%b %s\n' "$C_CYAN$C_BOLD" "$CODEIN_FETCHED" "$CODEIN_FETCH_TOTAL" "$C_RESET" "$remote"
   mkdir -p "$(dirname "$staged")"
   curl --retry 3 --retry-delay 1 --fail --silent --show-error "$RAW/$remote" -o "$staged"
   printf '%s|%s\n' "$remote" "$target" >> "$STAGE/install.list"
+  codein_success "Staged $remote"
 }
 fetch "termux/server.py" "$ROOT/server.py"
 fetch "termux/composio_connect.py" "$ROOT/composio_connect.py"
@@ -41,10 +112,16 @@ fetch "docs/TOOL_DOCS_INDEX.md" "$ROOT/docs/TOOL_DOCS_INDEX.md"
 fetch "docs/AGENT_SYSTEM_PROMPT.md" "$ROOT/docs/AGENT_SYSTEM_PROMPT.md"
 fetch "termux/LIBRARIES.md" "$ROOT/docs/LIBRARIES.md"
 
+codein_step "3/5  Validating staged files"
 python -m py_compile "$STAGE/termux/server.py" "$STAGE/termux/composio_connect.py" "$STAGE/termux/composio_platform.py" "$STAGE/termux/with-key.py"
 bash -n "$STAGE/termux/codein-bridge" "$STAGE/termux/codein-opencode" "$STAGE/termux/codein-links"
+codein_success "Python and shell syntax checks passed."
+
+codein_step "4/5  Installing the bridge and preparing Agent Room"
+CODEIN_INSTALLED=0
 while IFS='|' read -r remote target; do
   [ -n "$remote" ] || continue
+  CODEIN_INSTALLED=$((CODEIN_INSTALLED + 1))
   mkdir -p "$(dirname "$target")"
   cp "$STAGE/$remote" "$target.new.$$"
   if [[ "$target" == "$ROOT/server.py" || "$target" == "$ROOT/bin/"* ]]; then
@@ -54,8 +131,10 @@ while IFS='|' read -r remote target; do
   fi
   mv -f "$target.new.$$" "$target"
 done < "$STAGE/install.list"
+codein_success "Installed $CODEIN_INSTALLED validated bridge files."
 
 if [ ! -f "$ROOT/config.json" ]; then
+  codein_info "Creating a private local pairing configuration..."
   python - "$ROOT/config.json" <<'PY'
 import json, secrets, sys
 from pathlib import Path
@@ -63,6 +142,7 @@ p = Path(sys.argv[1])
 p.write_text(json.dumps({"port":8765,"token":secrets.token_urlsafe(32),"workspace":str(Path.home()/".codein"/"workspace")}, indent=2)+"\n")
 p.chmod(0o600)
 PY
+  codein_success "Created the local pairing configuration."
 fi
 
 # Keep local user data and the Android pairing token stable across upgrades.
@@ -91,6 +171,7 @@ Shared local context for every model and agent connected to Codein.
 8. If a required credential is missing, ask for that exact credential, store it in the local vault, then continue.
 9. Check the shared vault before asking again.
 ROOM
+  codein_success "Created the Agent Room guide."
 fi
 if ! grep -Fq "## Agent capability check" "$ROOT/ROOM.md"; then
 cat >> "$ROOT/ROOM.md" <<'ROOM'
@@ -106,8 +187,8 @@ if [ ! -f "$ROOT/.gitignore" ]; then
   printf '%s\n' 'keys/' 'config.json' '*.secret' > "$ROOT/.gitignore"
 fi
 
-echo
-echo "[Codein] Starting the local bridge..."
+codein_step "5/5  Starting and verifying local services"
+codein_info "Restarting the local bridge..."
 "$ROOT/bin/codein-bridge" restart
 TOKEN="$(python - "$ROOT/config.json" <<'PY'
 import json, sys
@@ -115,7 +196,7 @@ from pathlib import Path
 print(json.loads(Path(sys.argv[1]).read_text())["token"])
 PY
 )"
-python - "$ROOT/config.json" <<'PY'
+MCP_VERSION="$(python - "$ROOT/config.json" <<'PY'
 import json, sys
 from urllib.request import Request, urlopen
 config = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -130,34 +211,34 @@ version = result.get("serverInfo", {}).get("version", "")
 parts = [int(part) if part.isdigit() else 0 for part in version.split(".")]
 if (parts + [0, 0])[:3] < [1, 5, 1]:
     raise SystemExit("[Codein] MCP bridge update verification failed; expected version 1.5.1 or newer.")
-print("[Codein] MCP bridge verified: version " + version)
+print(version)
 PY
+)"
+codein_success "MCP bridge verified: version $MCP_VERSION"
+codein_info "Workspace and documentation skills are ready at $ROOT"
+codein_info "Bridge controls: $ROOT/bin/codein-bridge {start|stop|restart|status|logs}"
+codein_info "Bridge log: $ROOT/logs/server.log"
+codein_info "Keep Termux open while Codein uses it."
 
-echo
-echo "[Codein] Workspace and documentation skills ready: $ROOT"
-echo "[Codein] Bridge controls: $ROOT/bin/codein-bridge {start|stop|restart|status|logs}"
-echo "[Codein] Bridge log: $ROOT/logs/server.log"
-echo "[Codein] Keep Termux open while Codein uses it."
-echo
-echo "[Codein] Opening parallel connections (bridge + OpenCode + Quick Tunnel)..."
+codein_step "Opening parallel connections"
 if "$ROOT/bin/codein-links" start; then
-  echo "[Codein] Parallel links are up; the watchdog keeps them alive."
+  codein_success "Parallel links are up; the watchdog keeps them alive."
 else
-  echo "[Codein] Some links are not ready yet. The watchdog retries every 10s."
-  echo "[Codein] Check: $ROOT/bin/codein-links status"
+  codein_warn "Some links are not ready yet. The watchdog retries every 10 seconds."
+  codein_info "Check their status with: $ROOT/bin/codein-links status"
 fi
 
-echo
-echo "============================================================"
-echo "[Codein] TERMUX CONNECTION TOKEN"
-echo "Copy this token into Codein app > Termux connection:"
+printf '\n%b' "$C_YELLOW$C_BOLD"
+printf '  +--------------------------------------------------+\n'
+printf '  |           TERMUX CONNECTION TOKEN                |\n'
+printf '  |  Copy this token into Codein > Termux settings   |\n'
+printf '  +--------------------------------------------------+\n'
+printf '%b' "$C_RESET"
 python - "$ROOT/config.json" <<'PY'
 import json, sys
 from pathlib import Path
 config = json.loads(Path(sys.argv[1]).read_text())
 print(config["token"])
 PY
-echo "============================================================"
-echo "This token is private. Do not share it or post a screenshot."
-echo
-echo "[Codein] Bridge log: $ROOT/logs/server.log"
+codein_warn "This token is private. Do not share it or post a screenshot."
+codein_info "Bridge log: $ROOT/logs/server.log"
