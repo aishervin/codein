@@ -394,7 +394,7 @@ def dispatch_mcp_tool(name, args):
             result={"exit_code":exit_code,"stdout":stdout_tail,"stderr":stderr_tail,"stdout_head":stdout_head,"stdout_tail":stdout_tail,"stderr_tail":stderr_tail,"truncated":stdout_size>20000 or stderr_size>8000,"full_log_path":str(full_log),"duration_ms":int((time.monotonic()-start)*1000)}
             if timed_out: result["error"]="Command timed out"
         event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
-        return result
+        return redact_sensitive(result)
     if name=="agent_room_get":
         journal=EVENTS/"journal.jsonl"
         lines=journal.read_text(encoding="utf-8").splitlines()[-25:] if journal.exists() else []
@@ -1032,7 +1032,15 @@ def write_run_meta(run_id,meta):
 
 
 def redact_sensitive(value):
-    if isinstance(value,dict): return {key:redact_sensitive(item) for key,item in value.items()}
+    if isinstance(value,dict):
+        result={}
+        for key,item in value.items():
+            normalized=str(key).lower().replace("-","_")
+            if any(part in normalized for part in ("api_key","access_token","refresh_token","password","secret","authorization","consumer_key")):
+                result[key]="[REDACTED]"
+            else:
+                result[key]=redact_sensitive(item)
+        return result
     if isinstance(value,list): return [redact_sensitive(item) for item in value]
     if not isinstance(value,str): return value
     patterns=(
