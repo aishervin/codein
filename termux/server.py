@@ -159,7 +159,8 @@ def provider_catalog():
         catalog.append({"id":pid,"name":item["name"],"base_url":provider_base_url(item),
             "default_model":item["default_model"],"models":list(item.get("models") or []),
             "account_credential":item.get("account_key",""),
-            "key_optional":optional,            "key_url":item.get("key_url",""),
+            "key_optional":optional,
+            "key_url":item.get("key_url",""),
             "key_hint":item.get("key_hint",""),
             "configured":optional or (KEYS/(item["key"]+".json")).is_file(),
             "credential_name":item["key"]})
@@ -268,6 +269,7 @@ def mcp_tools_catalog():
         {"name":"run_subscribe","description":"Read durable run events after a sequence number; use SSE and Last-Event-ID to reconnect.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"},"after_seq":{"type":"integer"}},"required":["run_id"]}},
         {"name":"run_status","description":"Read durable run state.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}},
         {"name":"run_cancel","description":"Explicitly cancel a durable background run.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}},
+        {"name":"run_approve","description":"Approve or deny a persisted command approval for a run.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"},"call_id":{"type":"string"},"decision":{"type":"string","enum":["approve","deny"]},"always":{"type":"boolean"}},"required":["run_id","call_id","decision"]}},
         {"name":"run_list","description":"List recent durable agent runs.","inputSchema":{"type":"object","properties":{}}},
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
         {"name":"opencode_manage","description":"Manage the optional local OpenCode API: install/start, check status, restart, or stop. This does not replace the selected Codein chat provider.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","start","status","restart","stop"]}},"required":["action"]}}
@@ -313,7 +315,8 @@ def dispatch_mcp_tool(name, args):
             event("composio_tool_called",{"tool":name})
             return result
         key=str(readj(KEYS/"composio_consumer_api_key.json",{}).get("value","")).strip()
-        if not key: raise RuntimeError("Composio is not configured.")        result=composio_connect.call_tool(key,name[len("composio__"):],args)
+        if not key: raise RuntimeError("Composio is not configured.")
+        result=composio_connect.call_tool(key,name[len("composio__"):],args)
         event("composio_tool_called",{"tool":name})
         return result
     if name=="termux_command_approve":
@@ -435,6 +438,18 @@ def dispatch_mcp_tool(name, args):
         if control is None: return {"ok":False,"error":"Run is not active"}
         control.cancel(); append_run_event(rid,{"type":"status","status":"CANCELLING"})
         return {"ok":True,"run_id":rid}
+    if name=="run_approve":
+        rid=str(args.get("run_id","")); meta=read_run_meta(rid); pending=meta.get("pending_approval") or {}
+        if meta.get("status")!="AWAITING_APPROVAL": raise RuntimeError("Run is not awaiting approval")
+        if str(args.get("call_id",""))!=str(pending.get("call_id","")): raise RuntimeError("Approval call_id does not match")
+        decision=str(args.get("decision","deny"))
+        if decision not in ("approve","deny"): raise ValueError("Invalid decision")
+        append_run_event(rid,{"type":"status","status":"RESUMING"})
+        result=dispatch_mcp_tool("provider_chat_resume",{"continuation_id":pending.get("continuation_id"),"decision":decision,"always":bool(args.get("always",False))})
+        meta=read_run_meta(rid); meta["pending_approval"]=None; meta["status"]="DONE" if result.get("ok") else "FAILED"
+        meta["result"]=result.get("content",""); meta["error"]=result.get("error",""); write_run_meta(rid,meta)
+        append_run_event(rid,{"type":"done" if result.get("ok") else "error","content":result.get("content",""),"error":result.get("error","")})
+        return {"ok":bool(result.get("ok")),"run_id":rid,"result":result}
     if name=="provider_chat_resume":
         cid=str(args.get("continuation_id","")).strip()
         with PENDING_CHATS_LOCK:
@@ -475,7 +490,8 @@ def dispatch_mcp_tool(name, args):
         status,result=provider_chat(args)
         return result
     if name=="opencode_manage":
-        action=str(args.get("action","status"))        if action not in ("install","run","start","status","restart","stop"):
+        action=str(args.get("action","status"))
+        if action not in ("install","run","start","status","restart","stop"):
             return {"ok":False,"error":"Invalid action"}
         manager=ROOT/"bin"/"codein-opencode"
         if not manager.is_file(): return {"ok":False,"error":"OpenCode manager is missing. Re-run the Codein Termux installer."}
@@ -624,7 +640,8 @@ def read_anthropic_stream(response, emit, deadline):
 
 GEMINI_SCHEMA_FIELDS={
     "type","format","description","nullable","enum","items","maxItems","minItems",
-    "properties","required","minProperties","maxProperties","minimum","maximum",    "minLength","maxLength","pattern","anyOf","propertyOrdering"
+    "properties","required","minProperties","maxProperties","minimum","maximum",
+    "minLength","maxLength","pattern","anyOf","propertyOrdering"
 }
 
 def gemini_schema(schema):
@@ -651,6 +668,26 @@ def gemini_schema(schema):
         if "properties" in result: result["type"]="object"
         elif "items" in result: result["type"]="array"
     return result
+
+def provider_urlopen(request, timeout, emit=None, cancel=None, deadline=None):
+    delays=(1,2,4,8,16)
+    for attempt in range(5):
+        if cancel: cancel.check()
+        try: return urlopen(request,timeout=timeout)
+        except HTTPError as exc:
+            if exc.code not in (429,500,502,503,504) or attempt==4: raise
+            try: delay=max(0,min(30,float(exc.headers.get("Retry-After",""))))
+            except (TypeError,ValueError): delay=delays[attempt]+random.uniform(0,0.35)
+        except (URLError,TimeoutError):
+            if attempt==4: raise
+            delay=delays[attempt]+random.uniform(0,0.35)
+        if deadline is not None and time.monotonic()+delay>=deadline: raise TimeoutError("Provider retry budget exceeded")
+        if emit: emit({"type":"retry","attempt":attempt+1,"delay_seconds":round(delay,2)})
+        end=time.monotonic()+delay
+        while time.monotonic()<end:
+            if cancel: cancel.check()
+            time.sleep(min(0.2,end-time.monotonic()))
+    raise RuntimeError("Provider retry budget exhausted")
 
 def provider_chat(data, emit=None, cancel=None):
     pid=str(data.get("provider","")).strip().lower()
@@ -702,7 +739,7 @@ def provider_chat(data, emit=None, cancel=None):
                 if system: payload["systemInstruction"]={"parts":[{"text":system}]}
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
+                with tracked_response(cancel,provider_urlopen(request,request_timeout,emit=emit,cancel=cancel,deadline=deadline)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_gemini_stream(response,emit,deadline)
@@ -774,7 +811,8 @@ def provider_chat(data, emit=None, cancel=None):
                     if cancel: cancel.check()
                     if emit: emit({"type":"tool_call","id":str(call.get("id","")),"name":str(call.get("name",""))})
                     try: result=dispatch_mcp_tool(str(call.get("name","")),call.get("input") or {})
-                    except Exception as exc: result={"error":str(exc)[:1500]}                    if isinstance(result,dict) and result.get("permission_required"):
+                    except Exception as exc: result={"error":str(exc)[:1500]}
+                    if isinstance(result,dict) and result.get("permission_required"):
                         if emit: emit({"type":"approval_required","command":str(result.get("command",""))})
                         continuation=stash_pending_chat(pid,model,system,provider["kind"],msgs,{"id":str(call.get("id","")),"name":str(call.get("name","")),"args":call.get("input") or {}},timeout)
                         return 200,{"ok":True,"permission_required":True,"command":str(result.get("command","")),"continuation_id":continuation,"provider":pid,"model":model}
@@ -967,13 +1005,14 @@ def recover_agent_runs():
         if meta.get("status")=="RUNNING":
             meta["status"]="INTERRUPTED"; meta["updated_at"]=now(); write_run_meta(path.name,meta)
             append_run_event(path.name,{"type":"status","status":"INTERRUPTED","reason":"Bridge restarted"})
-recover_agent_runs()
 
 \ndef readj(p, fallback):
     try: return json.loads(p.read_text(encoding="utf-8"))
     except (OSError,ValueError): return fallback
 def event(kind,data):
     with (EVENTS/"journal.jsonl").open("a",encoding="utf-8") as f: f.write(json.dumps({"at":now(),"kind":kind,"data":data},ensure_ascii=False)+"\n")
+
+recover_agent_runs()
 
 def probe_links():
     """Return the parallel connection set recorded by codein-links, probed concurrently."""
@@ -1017,7 +1056,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.auth(): return self.sendj(401,{"ok":False,"error":"Authorization required"})
         p=urlparse(self.path).path
-        if p=="/mcp":            self.send_response(405); self.send_header("Allow","POST"); self.send_header("Content-Length","0"); self.end_headers()
+        if p=="/mcp":
+            self.send_response(405); self.send_header("Allow","POST"); self.send_header("Content-Length","0"); self.end_headers()
             return
         if p=="/health": return self.sendj(200,{"ok":True,"service":"codein-termux","time":now(),"workspace":str(WORKSPACE)})
         if p=="/api/workspace": return self.sendj(200,{"ok":True,"root":str(ROOT),"workspace":str(WORKSPACE),"state":readj(ROOT/"state.json",{})})
@@ -1189,7 +1229,8 @@ class Handler(BaseHTTPRequestHandler):
             control=register_stream(request_id)
             self.send_response(200)
             self.send_header("Content-Type","text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control","no-cache, no-transform")            self.send_header("X-Accel-Buffering","no")
+            self.send_header("Cache-Control","no-cache, no-transform")
+            self.send_header("X-Accel-Buffering","no")
             self.send_header("Access-Control-Allow-Origin","*")
             self.end_headers()
             def emit_sse(payload):
