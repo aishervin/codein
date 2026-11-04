@@ -1927,7 +1927,7 @@ private fun CodeinHeader(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
-                    modifier = Modifier.width(130.dp),
+                    modifier = Modifier.width(96.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -1956,7 +1956,7 @@ private fun CodeinHeader(
                     )
                 }
                 Row(
-                    modifier = Modifier.width(130.dp),
+                    modifier = Modifier.width(96.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -1998,14 +1998,9 @@ private fun ConnectionStatus(routeLabel: String?, isConnected: Boolean, connecti
         isConnected -> Color(0xFF4DDB8A)
         else -> TextMuted
     }
-    val statusLabel = when {
-        connectionFailed -> "${routeLabel ?: "Web"} · قطع"
-        isProcessing -> "${routeLabel ?: "Web"} · پاسخ"
-        isConnected -> "${routeLabel ?: "Web"} · آماده"
-        else -> "${routeLabel ?: "Web"} · اتصال"
-    }
     IconButton(
         onClick = onRetry,
+        enabled = connectionFailed,
         modifier = Modifier.size(34.dp).background(
             if (connectionFailed) AccentRed.copy(alpha = .12f) else Color.Transparent,
             CircleShape
