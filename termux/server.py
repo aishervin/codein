@@ -34,6 +34,8 @@ RUNS_ROOT.mkdir(parents=True,exist_ok=True)
 PENDING_ROOT.mkdir(parents=True,exist_ok=True)
 RUNS_LOCK=threading.RLock()
 RUN_CONTROLS={}
+RUN_PROCESSES={}
+RUN_THREAD_CONTEXT=threading.local()
 RUN_TERMINAL={"DONE","FAILED","CANCELLED","INTERRUPTED"}
 
 def stash_pending_chat(pid, model, system, kind, native, call, timeout):
@@ -358,6 +360,8 @@ def dispatch_mcp_tool(name, args):
             timed_out=False; exit_code=0
             with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
                 proc=subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),stdout=out,stderr=err,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)},start_new_session=True)
+                run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
+                if run_id: RUN_PROCESSES[run_id]=proc
                 try: exit_code=proc.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     timed_out=True
@@ -369,6 +373,8 @@ def dispatch_mcp_tool(name, args):
                         except (ProcessLookupError,PermissionError): proc.kill()
                         proc.wait()
                     exit_code=124
+                finally:
+                    if run_id: RUN_PROCESSES.pop(run_id,None)
             def head_tail(path,head_limit,tail_limit):
                 with path.open("rb") as stream:
                     head=stream.read(head_limit).decode("utf-8",errors="replace")
@@ -463,7 +469,16 @@ def dispatch_mcp_tool(name, args):
     if name=="run_cancel":
         rid=str(args.get("run_id","")); control=RUN_CONTROLS.get(rid)
         if control is None: return {"ok":False,"error":"Run is not active"}
-        control.cancel(); append_run_event(rid,{"type":"status","status":"CANCELLING"})
+        control.cancel()
+        proc=RUN_PROCESSES.get(rid)
+        if proc is not None:
+            try: os.killpg(proc.pid,signal.SIGTERM)
+            except (ProcessLookupError,PermissionError): pass
+            try: proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try: os.killpg(proc.pid,signal.SIGKILL)
+                except (ProcessLookupError,PermissionError): proc.kill()
+        append_run_event(rid,{"type":"status","status":"CANCELLING"})
         return {"ok":True,"run_id":rid}
     if name=="run_approve":
         rid=str(args.get("run_id","")); meta=read_run_meta(rid); pending=meta.get("pending_approval") or {}
@@ -1020,6 +1035,7 @@ def start_agent_run(arguments):
     control=DurableRunControl(); RUN_CONTROLS[run_id]=control
     append_run_event(run_id,{"type":"status","status":"RUNNING"})
     def worker():
+        RUN_THREAD_CONTEXT.run_id=run_id
         def emit(payload):
             control.check()
             if payload.get("type") in ("approval_required","done"): return
@@ -1045,7 +1061,10 @@ def start_agent_run(arguments):
             error_type=type(exc).__name__
             append_run_event(run_id,{"type":"error","error":error_type})
             meta=read_run_meta(run_id); meta["status"]="FAILED"; meta["error"]=error_type; write_run_meta(run_id,meta)
-        finally: RUN_CONTROLS.pop(run_id,None)
+        finally:
+            RUN_PROCESSES.pop(run_id,None)
+            RUN_THREAD_CONTEXT.run_id=None
+            RUN_CONTROLS.pop(run_id,None)
     threading.Thread(target=worker,name="codein-run-"+run_id[:8],daemon=True).start()
     return {"ok":True,"run_id":run_id,"status":"RUNNING"}
 
