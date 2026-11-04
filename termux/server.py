@@ -714,7 +714,7 @@ def provider_chat(data, emit=None, cancel=None):
     model_probe=bool(data.get("model_probe"))
     resume=data.get("resume") if isinstance(data.get("resume"),dict) else None
     # Probes must not expose action tools or let a model trigger local side effects.
-    tool_catalog=[] if model_probe else [tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_chat_resume","provider_models_list","provider_models_saved_list","provider_model_test","credential_save","termux_command_approve","opencode_manage","composio_platform_configure")]
+    tool_catalog=[] if model_probe else [tool for tool in mcp_tools_catalog() if tool["name"] not in ("provider_chat","provider_chat_resume","provider_models_list","provider_models_saved_list","provider_model_test","credential_save","termux_command_approve","opencode_manage","composio_platform_configure","run_start","run_subscribe","run_status","run_cancel","run_approve","run_list")]
     try:
         if cancel: cancel.check()
         if provider["kind"]=="gemini":
@@ -784,7 +784,7 @@ def provider_chat(data, emit=None, cancel=None):
             tools=[{"name":tool["name"],"description":tool["description"],"input_schema":tool["inputSchema"]} for tool in tool_catalog]
             url=provider_base_url(provider)+"/messages"
             headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"}
-            for attempt in range(9):
+            for attempt in range(max_agent_turns):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
@@ -793,7 +793,7 @@ def provider_chat(data, emit=None, cancel=None):
                 if system_parts: payload["system"]="\n\n".join(system_parts)
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
+                with tracked_response(cancel,provider_urlopen(request,request_timeout,emit=emit,cancel=cancel,deadline=deadline)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_anthropic_stream(response,emit,deadline)
@@ -833,7 +833,7 @@ def provider_chat(data, emit=None, cancel=None):
             headers={"Content-Type":"application/json"}
             if api_key: headers["Authorization"]="Bearer "+api_key
             if pid=="pollinations": headers["Referer"]="https://github.com/aishervin/codein"
-            for attempt in range(9):
+            for attempt in range(max_agent_turns):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline:
                     return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
@@ -846,7 +846,7 @@ def provider_chat(data, emit=None, cancel=None):
                     payload.update({"tools":tools,"tool_choice":"auto"})
                 request=Request(url,data=json.dumps(payload).encode(),headers=headers,method="POST")
                 request_timeout=min(timeout,max(1,int(deadline-time.monotonic()))) if emit else timeout
-                with tracked_response(cancel,urlopen(request,timeout=request_timeout)) as response:
+                with tracked_response(cancel,provider_urlopen(request,request_timeout,emit=emit,cancel=cancel,deadline=deadline)) as response:
                     if emit:
                         emit({"type":"status","stage":"provider_response","provider":pid,"iteration":attempt+1})
                         message=read_openai_stream(response,emit,deadline)
@@ -1006,7 +1006,7 @@ def recover_agent_runs():
             meta["status"]="INTERRUPTED"; meta["updated_at"]=now(); write_run_meta(path.name,meta)
             append_run_event(path.name,{"type":"status","status":"INTERRUPTED","reason":"Bridge restarted"})
 
-\ndef readj(p, fallback):
+def readj(p, fallback):
     try: return json.loads(p.read_text(encoding="utf-8"))
     except (OSError,ValueError): return fallback
 def event(kind,data):
