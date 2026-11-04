@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Codein local Termux bridge. Python standard library only."""
-import hashlib, json, os, subprocess, threading, time, uuid
+import hashlib, json, os, random, subprocess, threading, time, uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,7 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
-SERVER_VERSION="1.6.0"
+SERVER_VERSION="1.7.0"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -27,6 +27,13 @@ PENDING_CANCELLATIONS={}
 ACTIVE_STREAMS_LOCK=threading.Lock()
 PENDING_CHATS={}
 PENDING_CHATS_LOCK=threading.Lock()
+RUNS_ROOT=ROOT/"runs"
+PENDING_ROOT=RUNS_ROOT/"pending"
+RUNS_ROOT.mkdir(parents=True,exist_ok=True)
+PENDING_ROOT.mkdir(parents=True,exist_ok=True)
+RUNS_LOCK=threading.RLock()
+RUN_CONTROLS={}
+RUN_TERMINAL={"DONE","FAILED","CANCELLED","INTERRUPTED"}
 
 def stash_pending_chat(pid, model, system, kind, native, call, timeout):
     """Remember an interrupted provider turn so one approval resumes it."""
@@ -35,8 +42,13 @@ def stash_pending_chat(pid, model, system, kind, native, call, timeout):
         cutoff=time.time()-1800
         for key in [key for key,value in list(PENDING_CHATS.items()) if value.get("at",0)<cutoff]:
             PENDING_CHATS.pop(key,None)
-        PENDING_CHATS[continuation_id]={"pid":pid,"model":model,"system":system,"kind":kind,
+        state={"pid":pid,"model":model,"system":system,"kind":kind,
             "native":native,"call":call,"timeout":timeout,"at":time.time()}
+        PENDING_CHATS[continuation_id]=state
+        path=PENDING_ROOT/(continuation_id+".json")
+        tmp=path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state,ensure_ascii=False)+"\n",encoding="utf-8")
+        tmp.chmod(0o600); os.replace(tmp,path)
     return continuation_id
 
 class StreamControl:
@@ -147,8 +159,7 @@ def provider_catalog():
         catalog.append({"id":pid,"name":item["name"],"base_url":provider_base_url(item),
             "default_model":item["default_model"],"models":list(item.get("models") or []),
             "account_credential":item.get("account_key",""),
-            "key_optional":optional,
-            "key_url":item.get("key_url",""),
+            "key_optional":optional,            "key_url":item.get("key_url",""),
             "key_hint":item.get("key_hint",""),
             "configured":optional or (KEYS/(item["key"]+".json")).is_file(),
             "credential_name":item["key"]})
@@ -253,6 +264,11 @@ def mcp_tools_catalog():
         {"name":"provider_models_saved_list","description":"Query a provider model catalog using the API key already saved in the local credential vault.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)}},"required":["provider"]}},
         {"name":"provider_model_test","description":"Send one short text-generation probe to a single provider model. The optional test key is used only for this request and is never saved. This probe has no local tools.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"test_api_key":{"type":"string"}},"required":["provider","model"]}},
         {"name":"provider_chat_resume","description":"Resume a provider chat that paused for command approval: execute or deny the pending call, then continue the same turn to its final answer.","inputSchema":{"type":"object","properties":{"continuation_id":{"type":"string"},"decision":{"type":"string","enum":["approve","deny"]},"always":{"type":"boolean"}},"required":["continuation_id"]}},
+        {"name":"run_start","description":"Start a durable background agent run that survives client disconnects.","inputSchema":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object"}},"system":{"type":"string"},"timeout":{"type":"integer"},"total_timeout":{"type":"integer"},"max_turns":{"type":"integer"}},"required":["provider","model","messages"]}},
+        {"name":"run_subscribe","description":"Read durable run events after a sequence number; use SSE and Last-Event-ID to reconnect.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"},"after_seq":{"type":"integer"}},"required":["run_id"]}},
+        {"name":"run_status","description":"Read durable run state.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}},
+        {"name":"run_cancel","description":"Explicitly cancel a durable background run.","inputSchema":{"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"]}},
+        {"name":"run_list","description":"List recent durable agent runs.","inputSchema":{"type":"object","properties":{}}},
         {"name":"provider_chat","description":"Send a user chat turn to the selected configured AI provider. The server can call local MCP tools during the turn and returns the final answer.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":sorted(PROVIDERS)},"model":{"type":"string"},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string","enum":["user","assistant","system"]},"content":{"type":"string"}},"required":["role","content"]}},"system":{"type":"string"},"timeout":{"type":"integer","minimum":10,"maximum":180}},"required":["provider","model","messages"]}},
         {"name":"opencode_manage","description":"Manage the optional local OpenCode API: install/start, check status, restart, or stop. This does not replace the selected Codein chat provider.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["install","run","start","status","restart","stop"]}},"required":["action"]}}
     ]
@@ -297,8 +313,7 @@ def dispatch_mcp_tool(name, args):
             event("composio_tool_called",{"tool":name})
             return result
         key=str(readj(KEYS/"composio_consumer_api_key.json",{}).get("value","")).strip()
-        if not key: raise RuntimeError("Composio is not configured.")
-        result=composio_connect.call_tool(key,name[len("composio__"):],args)
+        if not key: raise RuntimeError("Composio is not configured.")        result=composio_connect.call_tool(key,name[len("composio__"):],args)
         event("composio_tool_called",{"tool":name})
         return result
     if name=="termux_command_approve":
@@ -411,10 +426,23 @@ def dispatch_mcp_tool(name, args):
         if status!=200 or not result.get("ok") or marker not in answer:
             raise RuntimeError("Model did not pass the live text-response test")
         return {"ok":True,"verified":True,"provider":pid,"model":model}
+    if name=="run_start": return start_agent_run(args)
+    if name=="run_subscribe": return read_run_events(str(args.get("run_id","")),int(args.get("after_seq",0)))
+    if name=="run_status": return get_run_status(str(args.get("run_id","")))
+    if name=="run_list": return list_agent_runs()
+    if name=="run_cancel":
+        rid=str(args.get("run_id","")); control=RUN_CONTROLS.get(rid)
+        if control is None: return {"ok":False,"error":"Run is not active"}
+        control.cancel(); append_run_event(rid,{"type":"status","status":"CANCELLING"})
+        return {"ok":True,"run_id":rid}
     if name=="provider_chat_resume":
         cid=str(args.get("continuation_id","")).strip()
         with PENDING_CHATS_LOCK:
             state=PENDING_CHATS.pop(cid,None)
+        pending_path=PENDING_ROOT/(cid+".json")
+        if state is None: state=readj(pending_path,None)
+        try: pending_path.unlink()
+        except OSError: pass
         if not state:
             raise RuntimeError("This approval request expired or was already used. Send the request again.")
         decision=str(args.get("decision","approve")).strip().lower()
@@ -447,8 +475,7 @@ def dispatch_mcp_tool(name, args):
         status,result=provider_chat(args)
         return result
     if name=="opencode_manage":
-        action=str(args.get("action","status"))
-        if action not in ("install","run","start","status","restart","stop"):
+        action=str(args.get("action","status"))        if action not in ("install","run","start","status","restart","stop"):
             return {"ok":False,"error":"Invalid action"}
         manager=ROOT/"bin"/"codein-opencode"
         if not manager.is_file(): return {"ok":False,"error":"OpenCode manager is missing. Re-run the Codein Termux installer."}
@@ -597,8 +624,7 @@ def read_anthropic_stream(response, emit, deadline):
 
 GEMINI_SCHEMA_FIELDS={
     "type","format","description","nullable","enum","items","maxItems","minItems",
-    "properties","required","minProperties","maxProperties","minimum","maximum",
-    "minLength","maxLength","pattern","anyOf","propertyOrdering"
+    "properties","required","minProperties","maxProperties","minimum","maximum",    "minLength","maxLength","pattern","anyOf","propertyOrdering"
 }
 
 def gemini_schema(schema):
@@ -645,8 +671,9 @@ def provider_chat(data, emit=None, cancel=None):
         content=str(item.get("content",""))
         if content: clean.append({"role":role,"content":content[:50000]})
     system=str(data.get("system",""))[:30000]
-    timeout=max(10,min(int(data.get("timeout",120)),180))
-    deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",300)),300)) if emit else None
+    timeout=max(10,min(int(data.get("timeout",120)),300))
+    max_agent_turns=max(1,min(int(data.get("max_turns",40)),100))
+    deadline=time.monotonic()+max(30,min(int(data.get("total_timeout",1800)),1800)) if emit else None
     model_probe=bool(data.get("model_probe"))
     resume=data.get("resume") if isinstance(data.get("resume"),dict) else None
     # Probes must not expose action tools or let a model trigger local side effects.
@@ -666,7 +693,7 @@ def provider_chat(data, emit=None, cancel=None):
             method=":streamGenerateContent?alt=sse&key=" if emit else ":generateContent?key="
             url=provider_base_url(provider)+"/models/"+quote(model,safe="")+method+quote(api_key,safe="")
             headers={"Content-Type":"application/json"}
-            for attempt in range(9):
+            for attempt in range(max_agent_turns):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline: return 504,{"ok":False,"error":"Provider chat exceeded its total time limit"}
                 if emit: emit({"type":"status","stage":"waiting_provider","provider":pid,"iteration":attempt+1})
@@ -747,8 +774,7 @@ def provider_chat(data, emit=None, cancel=None):
                     if cancel: cancel.check()
                     if emit: emit({"type":"tool_call","id":str(call.get("id","")),"name":str(call.get("name",""))})
                     try: result=dispatch_mcp_tool(str(call.get("name","")),call.get("input") or {})
-                    except Exception as exc: result={"error":str(exc)[:1500]}
-                    if isinstance(result,dict) and result.get("permission_required"):
+                    except Exception as exc: result={"error":str(exc)[:1500]}                    if isinstance(result,dict) and result.get("permission_required"):
                         if emit: emit({"type":"approval_required","command":str(result.get("command",""))})
                         continuation=stash_pending_chat(pid,model,system,provider["kind"],msgs,{"id":str(call.get("id","")),"name":str(call.get("name","")),"args":call.get("input") or {}},timeout)
                         return 200,{"ok":True,"permission_required":True,"command":str(result.get("command","")),"continuation_id":continuation,"provider":pid,"model":model}
@@ -849,7 +875,101 @@ def provider_chat(data, emit=None, cancel=None):
         if cancel and cancel.cancelled.is_set(): return 499,{"ok":False,"error":"Request cancelled"}
         return 502,{"ok":False,"error":"Provider request failed","error_type":type(exc).__name__}
 
-def readj(p, fallback):
+
+class DurableRunControl:
+    def __init__(self): self.cancelled=threading.Event()
+    def cancel(self): self.cancelled.set()
+    def check(self):
+        if self.cancelled.is_set(): raise RequestCancelled()
+
+def run_dir(run_id):
+    if not run_id or len(run_id)>64 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in run_id): raise ValueError("Invalid run_id")
+    path=RUNS_ROOT/run_id
+    if not path.is_dir(): raise FileNotFoundError("Run not found")
+    return path
+
+def read_run_meta(run_id): return readj(run_dir(run_id)/"meta.json",{})
+
+def write_run_meta(run_id,meta):
+    path=run_dir(run_id)/"meta.json"; tmp=path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    tmp.chmod(0o600); os.replace(tmp,path)
+
+def append_run_event(run_id,payload):
+    with RUNS_LOCK:
+        directory=run_dir(run_id); meta=readj(directory/"meta.json",{})
+        seq=int(meta.get("last_seq",0))+1; item={"seq":seq,"at":now(),**payload}
+        with (directory/"events.jsonl").open("a",encoding="utf-8") as stream:
+            stream.write(json.dumps(item,ensure_ascii=False,separators=(",",":"))+"\n"); stream.flush(); os.fsync(stream.fileno())
+        meta["last_seq"]=seq; meta["updated_at"]=now(); write_run_meta(run_id,meta)
+        return item
+
+def read_run_events(run_id,after_seq=0):
+    directory=run_dir(run_id); items=[]; path=directory/"events.jsonl"
+    if path.exists():
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                try: item=json.loads(line)
+                except ValueError: continue
+                if int(item.get("seq",0))>max(0,after_seq): items.append(item)
+    meta=read_run_meta(run_id)
+    return {"ok":True,"run_id":run_id,"events":items,"last_seq":int(meta.get("last_seq",0))}
+
+def get_run_status(run_id): return {"ok":True,"run_id":run_id,**read_run_meta(run_id)}
+
+def list_agent_runs():
+    result=[]
+    for path in sorted((p for p in RUNS_ROOT.iterdir() if p.is_dir() and p.name!="pending"),key=lambda p:p.stat().st_mtime,reverse=True)[:50]:
+        meta=readj(path/"meta.json",{})
+        if meta: result.append({"run_id":path.name,"status":meta.get("status"),"provider":meta.get("provider"),"model":meta.get("model"),"last_seq":meta.get("last_seq",0),"updated_at":meta.get("updated_at")})
+    return {"ok":True,"runs":result}
+
+def start_agent_run(arguments):
+    args=dict(arguments or {}); args.pop("test_api_key",None)
+    if not isinstance(args.get("messages"),list) or not args["messages"]: raise ValueError("messages must be a non-empty array")
+    run_id=uuid.uuid4().hex; directory=RUNS_ROOT/run_id; directory.mkdir(mode=0o700)
+    meta={"run_id":run_id,"status":"RUNNING","provider":str(args.get("provider","")),"model":str(args.get("model","")),"created_at":now(),"updated_at":now(),"last_seq":0,"pending_approval":None}
+    write_run_meta(run_id,meta)
+    (directory/"messages.json").write_text(json.dumps({"request":args,"native_history":args.get("messages",[])},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    (directory/"messages.json").chmod(0o600)
+    control=DurableRunControl(); RUN_CONTROLS[run_id]=control
+    append_run_event(run_id,{"type":"status","status":"RUNNING"})
+    def worker():
+        def emit(payload):
+            control.check(); append_run_event(run_id,payload)
+        try:
+            status,result=provider_chat(args,emit,control)
+            if result.get("permission_required"):
+                meta=read_run_meta(run_id); meta["status"]="AWAITING_APPROVAL"
+                meta["pending_approval"]={"call_id":str(result.get("continuation_id","")),"continuation_id":result.get("continuation_id"),"command":result.get("command","")}
+                write_run_meta(run_id,meta)
+                append_run_event(run_id,{"type":"approval_required","command":result.get("command",""),"call_id":meta["pending_approval"]["call_id"]})
+            elif status==200 and result.get("ok"):
+                meta=read_run_meta(run_id); meta["status"]="DONE"; meta["result"]=result.get("content",""); write_run_meta(run_id,meta)
+                append_run_event(run_id,{"type":"done","content":result.get("content","")})
+            else:
+                meta=read_run_meta(run_id); meta["status"]="CANCELLED" if status==499 else "FAILED"; meta["error"]=result.get("error","Run failed"); write_run_meta(run_id,meta)
+                append_run_event(run_id,{"type":"error","error":meta["error"]})
+        except RequestCancelled:
+            meta=read_run_meta(run_id); meta["status"]="CANCELLED"; write_run_meta(run_id,meta)
+            append_run_event(run_id,{"type":"status","status":"CANCELLED"})
+        except Exception as exc:
+            meta=read_run_meta(run_id); meta["status"]="FAILED"; meta["error"]=type(exc).__name__; write_run_meta(run_id,meta)
+            append_run_event(run_id,{"type":"error","error":type(exc).__name__})
+        finally: RUN_CONTROLS.pop(run_id,None)
+    threading.Thread(target=worker,name="codein-run-"+run_id[:8],daemon=True).start()
+    return {"ok":True,"run_id":run_id,"status":"RUNNING"}
+
+def recover_agent_runs():
+    for path in RUNS_ROOT.iterdir():
+        if not path.is_dir() or path.name=="pending": continue
+        meta=readj(path/"meta.json",{})
+        if meta.get("status")=="RUNNING":
+            meta["status"]="INTERRUPTED"; meta["updated_at"]=now(); write_run_meta(path.name,meta)
+            append_run_event(path.name,{"type":"status","status":"INTERRUPTED","reason":"Bridge restarted"})
+recover_agent_runs()
+
+\ndef readj(p, fallback):
     try: return json.loads(p.read_text(encoding="utf-8"))
     except (OSError,ValueError): return fallback
 def event(kind,data):
@@ -897,8 +1017,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.auth(): return self.sendj(401,{"ok":False,"error":"Authorization required"})
         p=urlparse(self.path).path
-        if p=="/mcp":
-            self.send_response(405); self.send_header("Allow","POST"); self.send_header("Content-Length","0"); self.end_headers()
+        if p=="/mcp":            self.send_response(405); self.send_header("Allow","POST"); self.send_header("Content-Length","0"); self.end_headers()
             return
         if p=="/health": return self.sendj(200,{"ok":True,"service":"codein-termux","time":now(),"workspace":str(WORKSPACE)})
         if p=="/api/workspace": return self.sendj(200,{"ok":True,"root":str(ROOT),"workspace":str(WORKSPACE),"state":readj(ROOT/"state.json",{})})
@@ -945,6 +1064,27 @@ class Handler(BaseHTTPRequestHandler):
         frame=("event: message\ndata: "+json.dumps(payload,ensure_ascii=False,separators=(",",":"))+"\n\n").encode("utf-8")
         self.wfile.write(frame)
         self.wfile.flush()
+
+    def handle_mcp_run_subscribe(self, request_id, args):
+        run_id=str(args.get("run_id",""))
+        try: run_dir(run_id)
+        except Exception as exc: return self.mcp_error(request_id,-32602,str(exc))
+        after_seq=max(int(args.get("after_seq",0)),int(self.headers.get("Last-Event-ID","0") or 0))
+        self.send_response(200); self.send_header("Content-Type","text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control","no-cache, no-transform"); self.send_header("X-Accel-Buffering","no"); self.end_headers()
+        last_heartbeat=time.monotonic()
+        try:
+            while True:
+                batch=read_run_events(run_id,after_seq)
+                for item in batch["events"]:
+                    frame=("id: "+str(item["seq"])+"\\nevent: codein\\ndata: "+json.dumps(item,ensure_ascii=False,separators=(",",":"))+"\\n\\n").encode()
+                    self.wfile.write(frame); self.wfile.flush(); after_seq=int(item["seq"])
+                meta=read_run_meta(run_id)
+                if meta.get("status") in RUN_TERMINAL and after_seq>=int(meta.get("last_seq",0)): break
+                if time.monotonic()-last_heartbeat>=15:
+                    self.wfile.write(b": heartbeat\\n\\n"); self.wfile.flush(); last_heartbeat=time.monotonic()
+                time.sleep(0.5)
+        except (BrokenPipeError,ConnectionResetError): pass
 
     def handle_mcp_provider_chat(self, request_id, params):
         request_key=str(request_id)
@@ -1021,6 +1161,8 @@ class Handler(BaseHTTPRequestHandler):
             name=str(params.get("name","")); args=params.get("arguments") or {}
             if name=="provider_chat" and "text/event-stream" in self.headers.get("Accept",""):
                 return self.handle_mcp_provider_chat(request_id,params)
+            if name=="run_subscribe" and "text/event-stream" in self.headers.get("Accept",""):
+                return self.handle_mcp_run_subscribe(request_id,params.get("arguments") or {})
             try:
                 result=dispatch_mcp_tool(name,args)
                 return self.mcp_result(request_id,{"content":[{"type":"text","text":json.dumps(result,ensure_ascii=False)}],"isError":False})
@@ -1047,8 +1189,7 @@ class Handler(BaseHTTPRequestHandler):
             control=register_stream(request_id)
             self.send_response(200)
             self.send_header("Content-Type","text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control","no-cache, no-transform")
-            self.send_header("X-Accel-Buffering","no")
+            self.send_header("Cache-Control","no-cache, no-transform")            self.send_header("X-Accel-Buffering","no")
             self.send_header("Access-Control-Allow-Origin","*")
             self.end_headers()
             def emit_sse(payload):
