@@ -168,6 +168,7 @@ private const val SAVED_CHATS_KEY = "saved_chats"
 private const val MODEL_PREFS = "codein_model_state"
 private const val MODEL_CATALOG_KEY = "provider_models"
 private const val SELECTED_MODEL_KEY = "selected_model"
+private const val USER_PICKED_MODEL_KEY = "model_picked_by_user"
 private const val SELECTED_PROVIDER_KEY = "selected_provider"
 
 private data class ChatMessage(
@@ -277,7 +278,8 @@ private val codeinModels = listOf(
 private val pollinationsFreeModels = listOf("openai", "openai-fast")
 private const val DEFAULT_AI_PROVIDER = "pollinations"
 private const val AI_PROVIDER_CATALOG_KEY = "ai_provider_catalog"
-// Pollinations is the keyless default; OpenCode stays available but needs its free key.
+private val retiredAiProviders = setOf("opencode")
+// Pollinations is the keyless default; ZERO/HERO keep using the built-in chat page.
 
 private fun aiProviderCatalog(): Pair<List<Pair<String, String>>, Map<String, String>> {
     val labels = mutableListOf(
@@ -443,11 +445,17 @@ private fun MainChatScreen(
     val availableModels = remember(modelPrefs) {
         mutableStateListOf<CodeinModel>().apply {
             addAll(codeinModels)
+            // An old save could point at a provider this build no longer ships (OpenCode).
+            // Resetting it lets ZERO/HERO and the keyless model answer again instead of failing silently.
+            if (modelPrefs.getString(SELECTED_PROVIDER_KEY, "").orEmpty() in retiredAiProviders) {
+                modelPrefs.edit().remove(SELECTED_MODEL_KEY).remove(SELECTED_PROVIDER_KEY).remove(MODEL_CATALOG_KEY)
+                    .remove(USER_PICKED_MODEL_KEY).apply()
+            }
             val stored = runCatching { JSONArray(modelPrefs.getString(MODEL_CATALOG_KEY, "[]")) }.getOrDefault(JSONArray())
             for (index in 0 until stored.length()) {
                 val item = stored.optJSONObject(index) ?: continue
                 val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
-                val provider = item.optString("provider").takeIf { it.isNotBlank() }
+                val provider = item.optString("provider").takeIf { it.isNotBlank() && it !in retiredAiProviders }
                 val model = CodeinModel(id, item.optString("suffix", id), provider)
                 if (none { it.id == model.id && it.providerId == model.providerId }) add(model)
             }
@@ -548,17 +556,31 @@ private fun MainChatScreen(
         }
     }
 
-    // First connection: make the keyless free model the default chat model,
-    // unless the user already picked one (including the offline ZERO mode).
-    LaunchedEffect(termuxConnected) {
+    // First run: pick the keyless free model as soon as the local bridge connects, so the
+    // chat works without saving a key. A model the user picked by hand is never replaced.
+    LaunchedEffect(termuxConnected, isConnected) {
         if (!termuxConnected) return@LaunchedEffect
-        if (modelPrefs.getString(SELECTED_MODEL_KEY, null) != null) return@LaunchedEffect
+        if (modelPrefs.getBoolean(USER_PICKED_MODEL_KEY, false)) return@LaunchedEffect
         val model = availableModels.firstOrNull { it.providerId == DEFAULT_AI_PROVIDER } ?: return@LaunchedEffect
+        if (selectedModel.id == model.id && selectedModel.providerId == model.providerId) return@LaunchedEffect
         selectedModel = model
         modelPrefs.edit()
             .putString(SELECTED_MODEL_KEY, model.id)
             .putString(SELECTED_PROVIDER_KEY, model.providerId.orEmpty())
             .apply()
+    }
+
+    // Coming back from a local model to ZERO/HERO needs the built-in page to be alive;
+    // re-inject its bridge instead of dropping every message.
+    LaunchedEffect(selectedModel.providerId, isConnected) {
+        if (selectedModel.providerId != null || isConnected) return@LaunchedEffect
+        var attempt = 0
+        while (attempt < 6 && !isConnected) {
+            delay(1500)
+            webView?.evaluateJavascript(CODEIN_JS_BRIDGE, null)
+            if (attempt == 2) webView?.reload()
+            attempt++
+        }
     }
 
     // Track Termux independently of the selected chat provider so all screens
@@ -626,6 +648,7 @@ private fun MainChatScreen(
         }
         modelPrefs.edit()
             .putString(MODEL_CATALOG_KEY, catalog.toString())
+            .putBoolean(USER_PICKED_MODEL_KEY, true)
             .putString(SELECTED_MODEL_KEY, model.id)
             .putString(SELECTED_PROVIDER_KEY, model.providerId ?: "")
             .apply()
@@ -910,15 +933,25 @@ private fun MainChatScreen(
         }
         if (target == null) {
             isStreaming = false
-            messages.add(ChatMessage(user = false, text = "Internal connection is not ready. Try again."))
+            liveAgentEvents = (liveAgentEvents + AgentTraceEvent("error", "صفحهٔ داخلی آماده نیست؛ پیام ارسال نشد.")).takeLast(60)
+            messages.add(ChatMessage(user = false, text = "صفحهٔ داخلی آماده نیست. یک لحظه صبر کن یا گفت‌وگوی جدید بساز و دوباره بفرست."))
             return
         }
         val script = "if (typeof window.CodeinNativeSend === 'function') " +
             "window.CodeinNativeSend(${JSONObject.quote(requestMessages.toString())}," +
             "${JSONObject.quote(selectedModel.id)},${JSONObject.quote("logical")}," +
             "${JSONObject.quote(effectiveSystemPrompt)});" +
-            " else CodeinBridge.error('Internal bridge is not ready');"
-        target.evaluateJavascript(script, null)
+            " else CodeinBridge.error('codein_bridge_missing: internal bridge is not ready');"
+        target.evaluateJavascript(script) { result ->
+            if (result != null && result.contains("codein_bridge_missing", ignoreCase = true)) {
+                isStreaming = false
+                isConnected = false
+                connectionFailed = true
+                liveAgentEvents = (liveAgentEvents + AgentTraceEvent("error", "پل داخلی صفحه از دست رفت؛ صفحه در حال بازنشانی است.")).takeLast(60)
+                messages.add(ChatMessage(user = false, text = "ارتباط داخلی صفحه قطع شده بود؛ صفحه بازنشانی شد. یک لحظه بعد پیام را دوباره بفرست."))
+                webView?.reload()
+            }
+        }
     }
 
     LaunchedEffect(showBrowser, isStreaming, pendingBrowserAction, pendingComposioVerification, composioOAuthLinkOpened) {
@@ -2013,9 +2046,7 @@ private fun ModelPicker(selectedModel: CodeinModel, models: List<CodeinModel>, o
                 overflow = TextOverflow.Clip
             )
             Spacer(Modifier.width(6.dp))
-            Box(Modifier.weight(1f, fill = false)) {
-                ModelSuffixText(selectedModel.suffix, Modifier.align(Alignment.CenterStart))
-            }
+            ModelSuffixText(selectedModel.suffix)
             Spacer(Modifier.width(4.dp))
             Text("⌄", color = TextMuted, fontSize = 16.sp, maxLines = 1, softWrap = false)
         }
@@ -2039,7 +2070,7 @@ private fun ModelPicker(selectedModel: CodeinModel, models: List<CodeinModel>, o
 }
 
 @Composable
-private fun ModelSuffixText(suffix: String, modifier: Modifier = Modifier) {
+private fun ModelSuffixText(suffix: String) {
     val alpha = remember { Animatable(1f) }
     val jitter = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
@@ -2064,7 +2095,7 @@ private fun ModelSuffixText(suffix: String, modifier: Modifier = Modifier) {
         maxLines = 1,
         softWrap = false,
         overflow = TextOverflow.Ellipsis,
-        modifier = modifier.graphicsLayer { translationX = jitter.value }
+        modifier = Modifier.graphicsLayer { translationX = jitter.value }
     )
 }
 
