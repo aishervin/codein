@@ -739,6 +739,20 @@ def provider_urlopen(request, timeout, emit=None, cancel=None, deadline=None):
             time.sleep(min(0.2,end-time.monotonic()))
     raise RuntimeError("Provider retry budget exhausted")
 
+def persist_run_messages(history):
+    run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
+    if not run_id: return
+    try:
+        path=run_dir(run_id)/"messages.json"
+        payload=readj(path,{})
+        payload["native_history"]=redact_sensitive(history)
+        tmp=path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\\n",encoding="utf-8")
+        tmp.chmod(0o600)
+        os.replace(tmp,path)
+    except (OSError,ValueError):
+        pass
+
 def provider_chat(data, emit=None, cancel=None):
     pid=str(data.get("provider","")).strip().lower()
     provider=PROVIDERS.get(pid)
@@ -806,6 +820,7 @@ def provider_chat(data, emit=None, cancel=None):
                     answer=message.get("content","") if emit else "".join(str(part.get("text","")) for part in parts if isinstance(part,dict))
                     break
                 contents.append(model_content)
+                persist_run_messages(contents)
                 tool_responses=[]
                 for call in calls[:12]:
                     if cancel: cancel.check()
@@ -821,6 +836,7 @@ def provider_chat(data, emit=None, cancel=None):
                     if emit: emit({"type":"tool_result","name":tool_name,"summary":"Tool returned an error" if isinstance(tool_result,dict) and tool_result.get("error") else "Tool completed"})
                     tool_responses.append({"functionResponse":{"name":tool_name,"response":{"result":tool_result}}})
                 contents.append({"role":"user","parts":tool_responses})
+                persist_run_messages(contents)
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         elif provider["kind"]=="anthropic":
             system_parts=[system] if system else []
@@ -856,6 +872,7 @@ def provider_chat(data, emit=None, cancel=None):
                     answer=message.get("content","") if emit else "".join(str(block.get("text","")) for block in blocks if isinstance(block,dict) and block.get("type")=="text")
                     break
                 msgs.append({"role":"assistant","content":blocks})
+                persist_run_messages(msgs)
                 results=[]
                 for call in tool_uses[:12]:
                     if cancel: cancel.check()
@@ -869,6 +886,7 @@ def provider_chat(data, emit=None, cancel=None):
                     if emit: emit({"type":"tool_result","id":str(call.get("id","")),"name":str(call.get("name","")),"summary":"Tool returned an error" if isinstance(result,dict) and result.get("error") else "Tool completed"})
                     results.append({"type":"tool_result","tool_use_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
                 msgs.append({"role":"user","content":results})
+                persist_run_messages(msgs)
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         else:
             msgs=[]
@@ -909,6 +927,7 @@ def provider_chat(data, emit=None, cancel=None):
                     answer=str(message.get("content") or "")
                     break
                 msgs.append(message)
+                persist_run_messages(msgs)
                 for call in calls[:12]:
                     if cancel: cancel.check()
                     function=call.get("function") or {}
@@ -931,8 +950,15 @@ def provider_chat(data, emit=None, cancel=None):
                             summary="Tool completed"
                         emit({"type":"tool_result","id":str(call.get("id","")),"name":name,"summary":summary})
                     msgs.append({"role":"tool","tool_call_id":call.get("id"),"content":json.dumps(result,ensure_ascii=False)})
+                    persist_run_messages(msgs)
             else: answer="The MCP tool loop reached its safety limit. Please continue with the available result."
         if not answer: return 502,{"ok":False,"error":"Provider returned an empty response","provider":pid,"model":model}
+        if provider["kind"]=="gemini":
+            contents.append({"role":"model","parts":[{"text":answer}]}); persist_run_messages(contents)
+        elif provider["kind"]=="anthropic":
+            msgs.append({"role":"assistant","content":answer}); persist_run_messages(msgs)
+        else:
+            msgs.append({"role":"assistant","content":answer}); persist_run_messages(msgs)
         event("provider_chat_completed",{"provider":pid,"model":model})
         if emit: emit({"type":"done","provider":pid,"model":model})
         return 200,{"ok":True,"provider":pid,"model":model,"content":answer}
