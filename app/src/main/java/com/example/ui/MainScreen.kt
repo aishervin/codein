@@ -119,6 +119,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -1921,12 +1922,14 @@ private fun CodeinHeader(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
         ) {
-            Box(Modifier.fillMaxWidth().height(52.dp)) {
-                // Keep only session creation and settings in the left header group.
+            Row(
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Row(
-                    modifier = Modifier.align(Alignment.CenterStart),
+                    modifier = Modifier.width(130.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     IconButton(onClick = onSettings, modifier = Modifier.size(34.dp)) {
                         Icon(Icons.Default.Settings, "Settings", tint = NeonOrange, modifier = Modifier.size(20.dp))
@@ -1935,11 +1938,9 @@ private fun CodeinHeader(
                         Icon(Icons.Default.Add, "New conversation", tint = Color(0xFF4DDB8A), modifier = Modifier.size(20.dp))
                     }
                 }
-                
-                // Center: Logo & Title
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.align(Alignment.Center)
+                    modifier = Modifier.weight(1f)
                 ) {
                     androidx.compose.foundation.Image(
                         painter = painterResource(R.drawable.shen_logo),
@@ -1954,21 +1955,17 @@ private fun CodeinHeader(
                         letterSpacing = .7.sp
                     )
                 }
-                
-                // Right: Browser shortcut beside the active connection status.
                 Row(
-                    modifier = Modifier.align(Alignment.CenterEnd),
+                    modifier = Modifier.width(130.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     IconButton(
                         onClick = onBrowser,
-                        modifier = Modifier
-                            .size(34.dp)
-                            .background(
-                                if (browserOpen) CodeinBrowserBlue.copy(alpha = .16f) else Color.Transparent,
-                                CircleShape
-                            )
+                        modifier = Modifier.size(34.dp).background(
+                            if (browserOpen) CodeinBrowserBlue.copy(alpha = .16f) else Color.Transparent,
+                            CircleShape
+                        )
                     ) {
                         Icon(
                             Icons.Default.Language,
@@ -1995,21 +1992,6 @@ private fun CodeinHeader(
 
 @Composable
 private fun ConnectionStatus(routeLabel: String?, isConnected: Boolean, connectionFailed: Boolean, isProcessing: Boolean, onRetry: () -> Unit) {
-    if (routeLabel == null) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.clickable(enabled = connectionFailed, onClick = onRetry).padding(4.dp)
-        ) {
-            val ready = if (isConnected && !isProcessing && !connectionFailed) Color(0xFF4DDB8A) else Color.Gray.copy(alpha = 0.3f)
-            val processing = if (isProcessing) Color(0xFFF1C40F) else Color.Gray.copy(alpha = 0.3f)
-            val error = if (connectionFailed) Color(0xFFE74C3C) else Color.Gray.copy(alpha = 0.3f)
-            androidx.compose.foundation.layout.Box(Modifier.size(8.dp).background(ready, CircleShape))
-            androidx.compose.foundation.layout.Box(Modifier.size(8.dp).background(processing, CircleShape))
-            androidx.compose.foundation.layout.Box(Modifier.size(8.dp).background(error, CircleShape))
-        }
-        return
-    }
     val statusColor = when {
         connectionFailed -> AccentRed
         isProcessing -> Color(0xFFF1C40F)
@@ -2017,18 +1999,21 @@ private fun ConnectionStatus(routeLabel: String?, isConnected: Boolean, connecti
         else -> TextMuted
     }
     val statusLabel = when {
-        connectionFailed -> "$routeLabel · قطع"
-        isProcessing -> "$routeLabel · پاسخ"
-        isConnected -> "$routeLabel · آماده"
-        else -> "$routeLabel · اتصال"
+        connectionFailed -> "${routeLabel ?: "Web"} · قطع"
+        isProcessing -> "${routeLabel ?: "Web"} · پاسخ"
+        isConnected -> "${routeLabel ?: "Web"} · آماده"
+        else -> "${routeLabel ?: "Web"} · اتصال"
     }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier.clickable(enabled = connectionFailed, onClick = onRetry).padding(4.dp)
+    IconButton(
+        onClick = onRetry,
+        modifier = Modifier.size(34.dp).background(
+            if (connectionFailed) AccentRed.copy(alpha = .12f) else Color.Transparent,
+            CircleShape
+        )
     ) {
-        androidx.compose.foundation.layout.Box(Modifier.size(7.dp).background(statusColor, CircleShape))
-        Text(statusLabel, color = statusColor, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(92.dp))
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier.size(10.dp).background(statusColor, CircleShape)
+        )
     }
 }
 
@@ -2061,19 +2046,21 @@ private fun ModelPicker(selectedModel: CodeinModel, models: List<CodeinModel>, o
             Text("⌄", color = TextMuted, fontSize = 16.sp, maxLines = 1, softWrap = false)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            models.forEach { model ->
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text(model.suffix, fontWeight = FontWeight.SemiBold)
-                            Text(model.id, color = TextMuted, fontSize = 10.sp)
+            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                models.distinctBy { it.id }.forEach { model ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(model.suffix, fontWeight = FontWeight.SemiBold)
+                                Text(model.id, color = TextMuted, fontSize = 10.sp)
+                            }
+                        },
+                        onClick = {
+                            onSelectModel(model)
+                            expanded = false
                         }
-                    },
-                    onClick = {
-                        onSelectModel(model)
-                        expanded = false
-                    }
-                )
+                    )
+                }
             }
         }
     }
@@ -2293,15 +2280,6 @@ private fun ChatBubble(
                                     Text("Continue to ${message.connectionService}", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
-                        }
-                    }
-                    if (showQuickAnswers && (message.text.trim().endsWith("؟") || message.text.trim().endsWith("?"))) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                        ) {
-                            Button(onClick = { onQuickAnswer("OK") }, modifier = Modifier.weight(1f)) { Text("OK", fontSize = 13.sp) }
-                            OutlinedButton(onClick = { onQuickAnswer("Cancel") }, modifier = Modifier.weight(1f)) { Text("Cancel", fontSize = 13.sp) }
                         }
                     }
                     if (message.text.isNotBlank() && message.kind == "message") {
@@ -2935,7 +2913,9 @@ private fun TermuxAgentRoomDialog(
         },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth().heightIn(
+                    max = (LocalConfiguration.current.screenHeightDp - 190).coerceAtLeast(240).dp
+                ).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
                 ScrollableTabRow(selectedTabIndex = selectedRoomTab, edgePadding = 0.dp) {
