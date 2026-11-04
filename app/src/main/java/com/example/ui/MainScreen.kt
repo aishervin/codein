@@ -2838,6 +2838,9 @@ private fun TermuxAgentRoomDialog(
     var keyName by remember(integrationPrefs) { mutableStateOf(integrationPrefs.getString("service_key_name", "cloudflare_api_token") ?: "cloudflare_api_token") }
     var keyValue by remember { mutableStateOf("") }
     var savedKeys by remember { mutableStateOf(emptyList<String>()) }
+    var remoteProviderCatalog by remember(integrationPrefs) {
+        mutableStateOf(runCatching { loadAiProviderCatalog(context) }.getOrDefault(JSONArray()))
+    }
     var status by remember { mutableStateOf("") }
     var output by remember { mutableStateOf("") }
     var roomEventLines by remember { mutableStateOf(emptyList<String>()) }
@@ -3139,7 +3142,6 @@ private fun TermuxAgentRoomDialog(
                 }
                 var aiAccountValue by remember { mutableStateOf("") }
                 var providerHelp by remember { mutableStateOf(false) }
-                val remoteProviderCatalog by remember(integrationPrefs) { mutableStateOf(runCatching { loadAiProviderCatalog(context) }.getOrDefault(JSONArray())) }
                 val (aiProviders, aiAccountKeys) = remember(remoteProviderCatalog, aiProviderId) {
                     val (baseLabels, baseAccountKeys) = aiProviderCatalog()
                     val labels = baseLabels.toMutableList()
