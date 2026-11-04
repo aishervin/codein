@@ -3271,6 +3271,7 @@ private fun TermuxAgentRoomDialog(
                             }
                         }
                     }
+                }
                 val aiKeyRequired = aiProviderId != "pollinations"
                 if (accountCredential != null) {
                     OutlinedTextField(
