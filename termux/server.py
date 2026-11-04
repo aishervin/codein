@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Codein local Termux bridge. Python standard library only."""
-import hashlib, json, os, random, subprocess, threading, time, uuid
+import hashlib, json, os, random, signal, subprocess, threading, time, uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -352,10 +352,36 @@ def dispatch_mcp_tool(name, args):
             except OSError: pass
         event("command_started",{"command":command[:500]}); start=time.monotonic()
         try:
-            run=subprocess.run(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),capture_output=True,text=True,timeout=timeout,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)})
-            result={"exit_code":run.returncode,"stdout":run.stdout[-100000:],"stderr":run.stderr[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
-        except subprocess.TimeoutExpired as exc:
-            result={"exit_code":124,"error":"Command timed out","stdout":str(exc.stdout or "")[-100000:],"stderr":str(exc.stderr or "")[-30000:],"duration_ms":int((time.monotonic()-start)*1000)}
+            log_dir=ROOT/"logs"/"commands"; log_dir.mkdir(parents=True,exist_ok=True)
+            command_id=uuid.uuid4().hex; stdout_path=log_dir/(command_id+".stdout.log"); stderr_path=log_dir/(command_id+".stderr.log")
+            timed_out=False; exit_code=0
+            with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
+                proc=subprocess.Popen(["/data/data/com.termux/files/usr/bin/bash","-lc",command],cwd=str(WORKSPACE),stdout=out,stderr=err,env={**os.environ,"CODEIN_ROOT":str(ROOT),"CODEIN_WORKSPACE":str(WORKSPACE)},start_new_session=True)
+                try: exit_code=proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out=True
+                    try: os.killpg(proc.pid,signal.SIGTERM)
+                    except (ProcessLookupError,PermissionError): proc.terminate()
+                    try: proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try: os.killpg(proc.pid,signal.SIGKILL)
+                        except (ProcessLookupError,PermissionError): proc.kill()
+                        proc.wait()
+                    exit_code=124
+            def head_tail(path,head_limit,tail_limit):
+                with path.open("rb") as stream:
+                    head=stream.read(head_limit).decode("utf-8",errors="replace")
+                    stream.seek(0,os.SEEK_END); size=stream.tell(); stream.seek(max(0,size-tail_limit))
+                    tail=stream.read(tail_limit).decode("utf-8",errors="replace")
+                    return head,tail,size
+            stdout_head,stdout_tail,stdout_size=head_tail(stdout_path,4000,16000)
+            _,stderr_tail,stderr_size=head_tail(stderr_path,0,8000)
+            full_log=log_dir/(command_id+".log")
+            with full_log.open("wb") as log:
+                log.write(b"=== STDOUT ===\\n"); log.write(stdout_path.read_bytes())
+                log.write(b"\\n=== STDERR ===\\n"); log.write(stderr_path.read_bytes())
+            result={"exit_code":exit_code,"stdout":stdout_tail,"stderr":stderr_tail,"stdout_head":stdout_head,"stdout_tail":stdout_tail,"stderr_tail":stderr_tail,"truncated":stdout_size>20000 or stderr_size>8000,"full_log_path":str(full_log),"duration_ms":int((time.monotonic()-start)*1000)}
+            if timed_out: result["error"]="Command timed out"
         event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
         return result
     if name=="agent_room_get":
@@ -915,10 +941,26 @@ def provider_chat(data, emit=None, cancel=None):
 
 
 class DurableRunControl:
-    def __init__(self): self.cancelled=threading.Event()
-    def cancel(self): self.cancelled.set()
+    def __init__(self):
+        self.cancelled=threading.Event(); self.lock=threading.Lock(); self.response=None
+    def cancel(self):
+        self.cancelled.set()
+        with self.lock: response=self.response
+        if response is not None:
+            try: response.close()
+            except Exception: pass
     def check(self):
         if self.cancelled.is_set(): raise RequestCancelled()
+    def attach(self,response):
+        with self.lock:
+            if self.cancelled.is_set():
+                try: response.close()
+                except Exception: pass
+                raise RequestCancelled()
+            self.response=response
+    def detach(self,response):
+        with self.lock:
+            if self.response is response: self.response=None
 
 def run_dir(run_id):
     if not run_id or len(run_id)>64 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in run_id): raise ValueError("Invalid run_id")
@@ -1301,3 +1343,4 @@ if __name__ == "__main__":
     print(f"[Codein] Workspace: {WORKSPACE}")
     print("[Codein] Ctrl+C to stop.")
     ThreadingHTTPServer(("127.0.0.1",PORT),Handler).serve_forever()
+
