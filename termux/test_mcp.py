@@ -778,8 +778,8 @@ class McpTransportTests(unittest.TestCase):
         directory.mkdir(exist_ok=True)
         mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"DONE","last_seq":2})
         (directory/"events.jsonl").write_text(
-            json.dumps({"seq":1,"type":"token","text":"old"})+"\\n"+
-            json.dumps({"seq":2,"type":"done","content":"new"})+"\\n",
+            json.dumps({"seq":1,"type":"token","text":"old"})+"\n"+
+            json.dumps({"seq":2,"type":"done","content":"new"})+"\n",
             encoding="utf-8"
         )
         payload={"jsonrpc":"2.0","id":"resume-sse","method":"tools/call","params":{
