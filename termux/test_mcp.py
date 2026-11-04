@@ -367,7 +367,7 @@ class McpTransportTests(unittest.TestCase):
 
     def test_provider_503_is_reported_as_transient_without_raw_json(self):
         body=json.dumps({"error":{"code":503,"message":"This model is currently experiencing high demand."}}).encode()
-        error=HTTPError("https://provider.invalid/generate",503,"busy",{},io.BytesIO(body))
+        error=HTTPError("https://provider.invalid/generate",503,"busy",{"Retry-After":"0"},io.BytesIO(body))
         with patch.object(mcp_server,"readj",return_value={"value":"test-api-key"}), \
                 patch.object(mcp_server,"urlopen",side_effect=[error,error,error,error,error]):
             status,result=mcp_server.provider_chat({"provider":"gemini","model":"test-model","messages":[{"role":"user","content":"hello"}]})
@@ -450,7 +450,7 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(status, 202)
         _, response = self.rpc("tools/list")
         names = {tool["name"] for tool in response["result"]["tools"]}
-        self.assertTrue({"termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_model_test", "provider_chat", "composio_platform_configure"} <= names)
+        self.assertTrue({"termux_exec", "termux_command_approve", "agent_room_get", "provider_models_list", "provider_models_saved_list", "provider_model_test", "provider_chat", "composio_platform_configure", "run_start", "run_subscribe", "run_status", "run_cancel", "run_approve", "run_list"} <= names)
 
     def test_composio_platform_configuration_never_returns_install_token(self):
         with patch.object(mcp_server.composio_platform, "configure", return_value={"ok":True,"user_id":"codein_0123456789abcdef0123456789abcdef","reused":False}), \
@@ -770,6 +770,32 @@ class McpTransportTests(unittest.TestCase):
         self.assertEqual(request.call_count,2)
         self.assertEqual(events[0]["type"],"retry")
 
+
+
+    def test_run_subscribe_replays_only_events_after_last_event_id(self):
+        run_id="sse-last-event-id"
+        directory=mcp_server.RUNS_ROOT/run_id
+        directory.mkdir(exist_ok=True)
+        mcp_server.write_run_meta(run_id,{"run_id":run_id,"status":"DONE","last_seq":2})
+        (directory/"events.jsonl").write_text(
+            json.dumps({"seq":1,"type":"token","text":"old"})+"\\n"+
+            json.dumps({"seq":2,"type":"done","content":"new"})+"\\n",
+            encoding="utf-8"
+        )
+        payload={"jsonrpc":"2.0","id":"resume-sse","method":"tools/call","params":{
+            "name":"run_subscribe","arguments":{"run_id":run_id,"after_seq":0}
+        }}
+        request=Request(self.url,data=json.dumps(payload).encode(),headers={
+            "Authorization":"Bearer mcp-test-token",
+            "Accept":"text/event-stream",
+            "Last-Event-ID":"1",
+            "Content-Type":"application/json"
+        },method="POST")
+        with urlopen(request,timeout=3) as response:
+            body=response.read().decode()
+        self.assertIn("id: 2",body)
+        self.assertIn('"content":"new"',body)
+        self.assertNotIn('"text":"old"',body)
 
 if __name__ == "__main__":
     unittest.main()
