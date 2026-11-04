@@ -491,7 +491,12 @@ def dispatch_mcp_tool(name, args):
         decision=str(args.get("decision","deny"))
         if decision not in ("approve","deny"): raise ValueError("Invalid decision")
         append_run_event(rid,{"type":"status","status":"RESUMING"})
-        result=dispatch_mcp_tool("provider_chat_resume",{"continuation_id":pending.get("continuation_id"),"decision":decision,"always":bool(args.get("always",False))})
+        previous_run_id=getattr(RUN_THREAD_CONTEXT,"run_id",None)
+        RUN_THREAD_CONTEXT.run_id=rid
+        try:
+            result=dispatch_mcp_tool("provider_chat_resume",{"continuation_id":pending.get("continuation_id"),"decision":decision,"always":bool(args.get("always",False))})
+        finally:
+            RUN_THREAD_CONTEXT.run_id=previous_run_id
         append_run_event(rid,{"type":"done" if result.get("ok") else "error","content":result.get("content",""),"error":result.get("error","")})
         meta=read_run_meta(rid); meta["pending_approval"]=None; meta["status"]="DONE" if result.get("ok") else "FAILED"
         meta["result"]=result.get("content",""); meta["error"]=result.get("error",""); write_run_meta(rid,meta)
