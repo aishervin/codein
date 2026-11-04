@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
@@ -50,15 +49,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.theme.NeonOrange
-
-private const val TERMUX_UPDATE_COMMAND = "~/.codein/bin/codein-links restart"
-
-/** The local bridge update command is copied for the user to run in Termux. */
-private fun copyTermuxCommand(context: android.content.Context, title: String, command: String) {
-    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText(title, command))
-    Toast.makeText(context, "دستور Termux کپی شد", Toast.LENGTH_SHORT).show()
-}
 
 private fun copyText(context: android.content.Context, message: String) {
     val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
@@ -151,16 +141,9 @@ fun CodeinSettingsSheet(
                 Spacer(Modifier.height(16.dp))
                 SettingSection("SYSTEM")
                 SettingRow(
-                    icon = Icons.Default.Download,
-                    title = "آپدیت‌ها و پچ‌های سیستمی",
-                    subtitle = "دستور به‌روزرسانی پل محلی را کپی کن",
-                    onClick = { copyTermuxCommand(context, "Codein Termux update", TERMUX_UPDATE_COMMAND) }
-                )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
-                SettingRow(
                     icon = Icons.Default.Settings,
-                    title = "پچ‌ها و به‌روزرسانی درون‌برنامه",
-                    subtitle = "بررسی بسته‌های جدید و نصب پچ",
+                    title = "به‌روزرسانی و پچ‌ها",
+                    subtitle = "باز کردن فهرست بسته‌ها، بررسی نسخه‌ها و نصب پچ",
                     onClick = onOpenPatches
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
