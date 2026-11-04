@@ -3257,24 +3257,25 @@ private fun TermuxAgentRoomDialog(
                         Text("  ▾")
                     }
                     DropdownMenu(expanded = aiProviderMenuExpanded, onDismissRequest = { aiProviderMenuExpanded = false }) {
-                        aiProviders.forEach { (label, id) ->
-                            DropdownMenuItem(enabled = !busy, text = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = {
-                                if (aiProviderId != id) {
-                                    aiKeyValue = ""
-                                    aiAccountValue = ""
-                                }
-                                aiProviderId = id
-                                aiModels = runCatching { JSONArray(integrationPrefs.getString("models_$id", "[]")) }.getOrDefault(JSONArray()).let { array -> (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank) }
-                                    .ifEmpty { if (id == DEFAULT_AI_PROVIDER) pollinationsFreeModels else emptyList() }
-                                selectedAiModel = (integrationPrefs.getString("selected_model_$id", "") ?: "").ifBlank {
-                                    if (id == DEFAULT_AI_PROVIDER) pollinationsFreeModels.first() else ""
-                                }
-                                integrationPrefs.edit().putString("ai_provider", id).apply()
-                                aiProviderMenuExpanded = false
-                            })
+                        Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                            aiProviders.distinctBy { it.second }.forEach { (label, id) ->
+                                DropdownMenuItem(enabled = !busy, text = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = {
+                                    if (aiProviderId != id) {
+                                        aiKeyValue = ""
+                                        aiAccountValue = ""
+                                    }
+                                    aiProviderId = id
+                                    aiModels = runCatching { JSONArray(integrationPrefs.getString("models_$id", "[]")) }.getOrDefault(JSONArray()).let { array -> (0 until array.length()).map { array.optString(it) }.filter(String::isNotBlank).distinct() }
+                                        .ifEmpty { if (id == DEFAULT_AI_PROVIDER) pollinationsFreeModels else emptyList() }
+                                    selectedAiModel = (integrationPrefs.getString("selected_model_$id", "") ?: "").ifBlank {
+                                        if (id == DEFAULT_AI_PROVIDER) pollinationsFreeModels.first() else ""
+                                    }
+                                    integrationPrefs.edit().putString("ai_provider", id).apply()
+                                    aiProviderMenuExpanded = false
+                                })
+                            }
                         }
                     }
-                }
                 val aiKeyRequired = aiProviderId != "pollinations"
                 if (accountCredential != null) {
                     OutlinedTextField(
@@ -3381,12 +3382,14 @@ private fun TermuxAgentRoomDialog(
                             Text("  ▾")
                         }
                         DropdownMenu(expanded = aiModelMenuExpanded, onDismissRequest = { aiModelMenuExpanded = false }) {
-                            aiModels.forEach { modelId ->
-                                DropdownMenuItem(enabled = !busy, text = { Text(modelId, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = {
-                                    selectedAiModel = modelId
-                                    integrationPrefs.edit().putString("selected_model_$aiProviderId", modelId).putString("ai_provider", aiProviderId).apply()
-                                    aiModelMenuExpanded = false
-                                })
+                            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                                aiModels.distinct().forEach { modelId ->
+                                    DropdownMenuItem(enabled = !busy, text = { Text(modelId, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = {
+                                        selectedAiModel = modelId
+                                        integrationPrefs.edit().putString("selected_model_$aiProviderId", modelId).putString("ai_provider", aiProviderId).apply()
+                                        aiModelMenuExpanded = false
+                                    })
+                                }
                             }
                         }
                     }
@@ -3444,13 +3447,15 @@ private fun TermuxAgentRoomDialog(
                         Text("  ▾")
                     }
                     DropdownMenu(expanded = serviceMenuExpanded, onDismissRequest = { serviceMenuExpanded = false }) {
-                        serviceKeyOptions.forEach { (label, value) ->
-                            DropdownMenuItem(text = { Text(label) }, onClick = {
-                                if (keyName != value) serviceTokenValue = ""
-                                keyName = value
-                                integrationPrefs.edit().putString("service_key_name", value).apply()
-                                serviceMenuExpanded = false
-                            })
+                        Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                            serviceKeyOptions.distinctBy { it.second }.forEach { (label, value) ->
+                                DropdownMenuItem(text = { Text(label) }, onClick = {
+                                    if (keyName != value) serviceTokenValue = ""
+                                    keyName = value
+                                    integrationPrefs.edit().putString("service_key_name", value).apply()
+                                    serviceMenuExpanded = false
+                                })
+                            }
                         }
                     }
                 }
