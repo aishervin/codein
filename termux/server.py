@@ -1006,7 +1006,7 @@ def redact_sensitive(value):
     if not isinstance(value,str): return value
     patterns=(
         (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s\"',;]+",r"\1[REDACTED]"),
-        (r"(?i)(\\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\\b\\s*[:=]\\s*)[^\\s\"',;]+",r"\\1[REDACTED]"),
+        (r"(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b\s*[:=]\s*)[^\s\"',;]+",r"\1[REDACTED]"),
         (r"(?i)(x-api-key\s*:\s*)[^\s\"',;]+",r"\1[REDACTED]"),
         (r"(?i)(--(?:token|api-key|password|secret)\s+)[^\s]+",r"\1[REDACTED]"),
     )
