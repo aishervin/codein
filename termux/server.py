@@ -472,9 +472,9 @@ def dispatch_mcp_tool(name, args):
         if decision not in ("approve","deny"): raise ValueError("Invalid decision")
         append_run_event(rid,{"type":"status","status":"RESUMING"})
         result=dispatch_mcp_tool("provider_chat_resume",{"continuation_id":pending.get("continuation_id"),"decision":decision,"always":bool(args.get("always",False))})
+        append_run_event(rid,{"type":"done" if result.get("ok") else "error","content":result.get("content",""),"error":result.get("error","")})
         meta=read_run_meta(rid); meta["pending_approval"]=None; meta["status"]="DONE" if result.get("ok") else "FAILED"
         meta["result"]=result.get("content",""); meta["error"]=result.get("error",""); write_run_meta(rid,meta)
-        append_run_event(rid,{"type":"done" if result.get("ok") else "error","content":result.get("content",""),"error":result.get("error","")})
         return {"ok":bool(result.get("ok")),"run_id":rid,"result":result}
     if name=="provider_chat_resume":
         cid=str(args.get("continuation_id","")).strip()
@@ -702,6 +702,8 @@ def provider_urlopen(request, timeout, emit=None, cancel=None, deadline=None):
         try: return urlopen(request,timeout=timeout)
         except HTTPError as exc:
             if exc.code not in (429,500,502,503,504) or attempt==4: raise
+            try: exc.close()
+            except Exception: pass
             try: delay=max(0,min(30,float(exc.headers.get("Retry-After",""))))
             except (TypeError,ValueError): delay=delays[attempt]+random.uniform(0,0.35)
         except (URLError,TimeoutError):
@@ -1025,17 +1027,19 @@ def start_agent_run(arguments):
                 write_run_meta(run_id,meta)
                 append_run_event(run_id,{"type":"approval_required","command":result.get("command",""),"call_id":meta["pending_approval"]["call_id"]})
             elif status==200 and result.get("ok"):
-                meta=read_run_meta(run_id); meta["status"]="DONE"; meta["result"]=result.get("content",""); write_run_meta(run_id,meta)
                 append_run_event(run_id,{"type":"done","content":result.get("content","")})
+                meta=read_run_meta(run_id); meta["status"]="DONE"; meta["result"]=result.get("content",""); write_run_meta(run_id,meta)
             else:
-                meta=read_run_meta(run_id); meta["status"]="CANCELLED" if status==499 else "FAILED"; meta["error"]=result.get("error","Run failed"); write_run_meta(run_id,meta)
-                append_run_event(run_id,{"type":"error","error":meta["error"]})
+                error_text=result.get("error","Run failed")
+                append_run_event(run_id,{"type":"error","error":error_text})
+                meta=read_run_meta(run_id); meta["status"]="CANCELLED" if status==499 else "FAILED"; meta["error"]=error_text; write_run_meta(run_id,meta)
         except RequestCancelled:
-            meta=read_run_meta(run_id); meta["status"]="CANCELLED"; write_run_meta(run_id,meta)
             append_run_event(run_id,{"type":"status","status":"CANCELLED"})
+            meta=read_run_meta(run_id); meta["status"]="CANCELLED"; write_run_meta(run_id,meta)
         except Exception as exc:
-            meta=read_run_meta(run_id); meta["status"]="FAILED"; meta["error"]=type(exc).__name__; write_run_meta(run_id,meta)
-            append_run_event(run_id,{"type":"error","error":type(exc).__name__})
+            error_type=type(exc).__name__
+            append_run_event(run_id,{"type":"error","error":error_type})
+            meta=read_run_meta(run_id); meta["status"]="FAILED"; meta["error"]=error_type; write_run_meta(run_id,meta)
         finally: RUN_CONTROLS.pop(run_id,None)
     threading.Thread(target=worker,name="codein-run-"+run_id[:8],daemon=True).start()
     return {"ok":True,"run_id":run_id,"status":"RUNNING"}
@@ -1343,4 +1347,5 @@ if __name__ == "__main__":
     print(f"[Codein] Workspace: {WORKSPACE}")
     print("[Codein] Ctrl+C to stop.")
     ThreadingHTTPServer(("127.0.0.1",PORT),Handler).serve_forever()
+
 
