@@ -29,6 +29,7 @@ PENDING_CHATS={}
 PENDING_CHATS_LOCK=threading.Lock()
 RUNS_ROOT=ROOT/"runs"
 PENDING_ROOT=RUNS_ROOT/"pending"
+PENDING_APPROVAL_TTL=int(CONFIG.get("approval_ttl_seconds",86400))
 RUNS_ROOT.mkdir(parents=True,exist_ok=True)
 PENDING_ROOT.mkdir(parents=True,exist_ok=True)
 RUNS_LOCK=threading.RLock()
@@ -486,6 +487,8 @@ def dispatch_mcp_tool(name, args):
         except OSError: pass
         if not state:
             raise RuntimeError("This approval request expired or was already used. Send the request again.")
+        if time.time()-float(state.get("at",0))>PENDING_APPROVAL_TTL:
+            raise RuntimeError("This approval request expired after 24 hours. Send the task again.")
         decision=str(args.get("decision","approve")).strip().lower()
         pending=state.get("call") or {}
         pending_name=str(pending.get("name",""))
@@ -1018,7 +1021,9 @@ def start_agent_run(arguments):
     append_run_event(run_id,{"type":"status","status":"RUNNING"})
     def worker():
         def emit(payload):
-            control.check(); append_run_event(run_id,payload)
+            control.check()
+            if payload.get("type") in ("approval_required","done"): return
+            append_run_event(run_id,payload)
         try:
             status,result=provider_chat(args,emit,control)
             if result.get("permission_required"):
@@ -1049,8 +1054,8 @@ def recover_agent_runs():
         if not path.is_dir() or path.name=="pending": continue
         meta=readj(path/"meta.json",{})
         if meta.get("status")=="RUNNING":
-            meta["status"]="INTERRUPTED"; meta["updated_at"]=now(); write_run_meta(path.name,meta)
             append_run_event(path.name,{"type":"status","status":"INTERRUPTED","reason":"Bridge restarted"})
+            meta=readj(path/"meta.json",meta); meta["status"]="INTERRUPTED"; meta["updated_at"]=now(); write_run_meta(path.name,meta)
 
 def readj(p, fallback):
     try: return json.loads(p.read_text(encoding="utf-8"))
