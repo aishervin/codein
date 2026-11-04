@@ -747,7 +747,7 @@ def persist_run_messages(history):
         payload=readj(path,{})
         payload["native_history"]=redact_sensitive(history)
         tmp=path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\\n",encoding="utf-8")
+        tmp.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
         tmp.chmod(0o600)
         os.replace(tmp,path)
     except (OSError,ValueError):
