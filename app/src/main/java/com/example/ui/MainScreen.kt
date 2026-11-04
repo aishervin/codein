@@ -3442,6 +3442,7 @@ private fun TermuxAgentRoomDialog(
                         modifier = Modifier.fillMaxWidth()
                 ) { Text("ذخیرهٔ کلید و فعال‌کردن مدل") }
                 }
+                }
 
                 if (selectedRoomTab == 3) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .25f))
