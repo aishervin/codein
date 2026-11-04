@@ -444,7 +444,7 @@ class McpTransportTests(unittest.TestCase):
         })
         self.assertEqual(status, 200)
         self.assertEqual(response["result"]["protocolVersion"], "2025-03-26")
-        self.assertEqual(response["result"]["serverInfo"]["version"], "1.3.0")
+        self.assertEqual(response["result"]["serverInfo"]["version"], mcp_server.SERVER_VERSION)
         self.assertIn("logging", response["result"]["capabilities"])
         status, _ = self.rpc("notifications/initialized", request_id=None)
         self.assertEqual(status, 202)

@@ -51,6 +51,22 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.theme.NeonOrange
 
+private const val TERMUX_SETUP_COMMAND = "pkg install -y curl && curl -fsSL https://raw.githubusercontent.com/aishervin/codein/main/termux/codein-bootstrap.sh | bash"
+private const val TERMUX_UPDATE_COMMAND = "~/.codein/bin/codein-links restart"
+
+/** Termux setup is run by the user, so these rows only copy a command; they never switch apps. */
+private fun copyTermuxCommand(context: android.content.Context, title: String, command: String) {
+    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText(title, command))
+    Toast.makeText(context, "دستور Termux کپی شد", Toast.LENGTH_SHORT).show()
+}
+
+private fun copyText(context: android.content.Context, message: String) {
+    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Codein", message))
+    Toast.makeText(context, "کپی شد", Toast.LENGTH_SHORT).show()
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CodeinSettingsSheet(
@@ -60,7 +76,7 @@ fun CodeinSettingsSheet(
     modelActive: Boolean,
     termuxConnected: Boolean,
     onOpenHistory: () -> Unit,
-    onOpenTermux: (Int) -> Unit,
+    onOpenModels: () -> Unit,
     onOpenIntegrations: () -> Unit,
     onOpenToolTokens: () -> Unit,
     onOpenPatches: () -> Unit,
@@ -81,30 +97,29 @@ fun CodeinSettingsSheet(
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
                 SheetTitle(Icons.Default.Settings, "Settings", "پیکربندی و مدیریت سیستم")
                 Spacer(Modifier.height(18.dp))
-
                 SettingSection("AI MODELS & TOKENS")
                 SettingRow(
                     icon = Icons.Default.Extension,
                     title = "مدل‌های هوش مصنوعی",
                     subtitle = "انتخاب سرویس، مدل و استعلام API",
-                    onClick = { onOpenTermux(0) }
+                    onClick = onOpenModels
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
                 SettingRow(
-                    icon = Icons.Default.Extension, // You might want a different icon for vault
+                    icon = Icons.Default.Extension,
                     title = "ذخیره توکن و اعتبارنامه‌ها",
                     subtitle = "مدیریت کلیدها در خزانه محلی Termux",
                     enabled = termuxConnected,
-                    onClick = { onOpenTermux(3) }
+                    onClick = onOpenToolTokens
                 )
 
                 Spacer(Modifier.height(16.dp))
                 SettingSection("TERMINAL")
                 SettingRow(
-                    icon = painterResource(R.drawable.ic_termux), 
+                    icon = painterResource(R.drawable.ic_termux),
                     title = "اتصال Termux",
-                    subtitle = if (termuxConnected) "پل MCP متصل است · localhost:8765" else "تنظیم و راه‌اندازی پل ارتباطی محلی",
-                    onClick = { onOpenTermux(1) }
+                    subtitle = if (termuxConnected) "پل MCP متصل است · localhost:8765" else "دستور راه‌اندازی پل ارتباطی محلی را کپی کن",
+                    onClick = { copyTermuxCommand(context, "Codein Termux setup", TERMUX_SETUP_COMMAND) }
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
                 SettingRow(
@@ -114,7 +129,6 @@ fun CodeinSettingsSheet(
                     enabled = modelActive && termuxConnected,
                     onClick = onOpenIntegrations
                 )
-
                 Spacer(Modifier.height(16.dp))
                 SettingSection("HISTORY & DATA")
                 SettingRow(
@@ -139,8 +153,15 @@ fun CodeinSettingsSheet(
                 SettingRow(
                     icon = Icons.Default.Download,
                     title = "آپدیت‌ها و پچ‌های سیستمی",
-                    subtitle = "بررسی فایل‌های جدید و مخزن Codein",
-                    onClick = { onOpenTermux(2) }
+                    subtitle = "دستور به‌روزرسانی پل محلی را کپی کن",
+                    onClick = { copyTermuxCommand(context, "Codein Termux update", TERMUX_UPDATE_COMMAND) }
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
+                SettingRow(
+                    icon = Icons.Default.Settings,
+                    title = "پچ‌ها و به‌روزرسانی درون‌برنامه",
+                    subtitle = "بررسی بسته‌های جدید و نصب پچ",
+                    onClick = onOpenPatches
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = .35f))
                 SettingRow(
@@ -209,7 +230,7 @@ private fun SheetTitle(icon: ImageVector, title: String, subtitle: String) {
 
 @Composable
 private fun SettingRow(
-    icon: Any, // Can be ImageVector or Painter
+    icon: Any,
     title: String,
     subtitle: String,
     enabled: Boolean = true,

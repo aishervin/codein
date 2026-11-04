@@ -12,7 +12,7 @@ import composio_connect
 import composio_platform
 
 ROOT=Path.home()/".codein"
-SERVER_VERSION="1.5.1"
+SERVER_VERSION="1.6.0"
 CONFIG=json.loads((ROOT/"config.json").read_text()) if (ROOT/"config.json").exists() else {}
 TOKEN=str(CONFIG.get("token",""))
 PORT=int(CONFIG.get("port",8765))
@@ -115,20 +115,38 @@ PROVIDERS = {
     "mistral": {"name":"Mistral","key":"mistral_api_key","base_url":"https://api.mistral.ai/v1","default_model":"","kind":"openai","models":[]},
     "xai": {"name":"xAI Grok","key":"xai_api_key","base_url":"https://api.x.ai/v1","default_model":"","kind":"openai","models":[]},
     "groq": {"name":"Groq","key":"groq_api_key","base_url":"https://api.groq.com/openai/v1","default_model":"","kind":"openai","models":[]},
-    # OpenCode Zen exposes a free OpenAI-compatible tier. A free key from opencode.ai/auth is
-    # required: without one the endpoint answers 429 (quota) or 403 (Cloudflare block).
-    # Two light free models are the defaults.
-    "opencode": {"name":"OpenCode Free","key":"opencode_api_key","base_url":"https://opencode.ai/inference/openai/v1","default_model":"mimo-v2.6-flash-free","kind":"openai",
-                 "models":["mimo-v2.6-flash-free","ling-3.1-flash-free"],
-                 "key_url":"https://opencode.ai/auth","key_hint":"Create a free OpenCode key at opencode.ai/auth, then save it here once. Free models answer 403/429 without it."},
+    # Keyless, OpenAI-compatible free tiers. No account and no credit card are needed, so the
+    # app can chat without any saved credential.
+    "pollinations": {"name":"Pollinations (بدون کلید)","key":"pollinations_api_key","base_url":"https://text.pollinations.ai/openai","default_model":"openai","kind":"openai",
+                     "models":["openai","openai-fast"],"key_optional":True,
+                     "key_url":"https://pollinations.ai","key_hint":"Keyless free tier. A PK_ key or codex token is optional and only raises rate limits."},
+    "huggingface": {"name":"Hugging Face","key":"huggingface_api_key","base_url":"https://router.huggingface.co/v1","default_model":"Qwen/Qwen3-8B","kind":"openai",
+                    "models":[],"key_url":"https://huggingface.co/settings/tokens","key_hint":"Free Hugging Face token with Inference Providers permission. No credit card needed."},
+    "cloudflare": {"name":"Cloudflare Workers AI","key":"cloudflare_ai_token","base_url":"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1","default_model":"@cf/meta/llama-3.1-8b-instruct","kind":"openai",
+                   "models":["@cf/meta/llama-3.1-8b-instruct","@cf/meta/llama-3.3-70b-instruct-fp8-fast","@cf/qwen/qwen2.5-coder-32b-instruct"],
+                   "account_key":"cloudflare_account_id","key_url":"https://dash.cloudflare.com/profile/api-tokens","key_hint":"Free Cloudflare Workers AI quota. Save the Account ID plus an API token with Workers AI access."},
 }
+
+def provider_account_id(provider):
+    name=str(provider.get("account_key") or "").strip()
+    if not name: return ""
+    return str(readj(KEYS/(name+".json"),{}).get("value","")).strip()
+
+def provider_base_url(provider):
+    base=str(provider["base_url"])
+    if "{account_id}" in base:
+        account=provider_account_id(provider)
+        if not account: return base
+        base=base.replace("{account_id}",quote(account,safe=""))
+    return base
 
 def provider_catalog():
     catalog=[]
     for pid,item in PROVIDERS.items():
         optional=bool(item.get("key_optional"))
-        catalog.append({"id":pid,"name":item["name"],"base_url":item["base_url"],
+        catalog.append({"id":pid,"name":item["name"],"base_url":provider_base_url(item),
             "default_model":item["default_model"],"models":list(item.get("models") or []),
+            "account_credential":item.get("account_key",""),
             "key_optional":optional,
             "key_url":item.get("key_url",""),
             "key_hint":item.get("key_hint",""),
@@ -141,19 +159,26 @@ def discover_provider_models(pid, api_key):
     key=str(api_key or "").strip()
     if not provider: return 400,{"ok":False,"error":"Unsupported provider"}
     if not key and not provider.get("key_optional"): return 400,{"ok":False,"error":"API key is required"}
+    if provider.get("account_key") and not provider_account_id(provider):
+        found=[]
+        for mid in provider.get("models") or []:
+            if mid not in found: found.append(mid)
+        return 200,{"ok":True,"provider":pid,"provider_name":provider["name"],"models":found,
+                    "notice":"Account ID is not saved yet; showing the curated free models."}
     if provider.get("key_optional"):
-        # Curated free defaults: probing the whole Zen catalog would be slow and mostly paid.
+        # Curated free defaults: probing the whole free catalog would be slow and may rate-limit.
         models=list(provider.get("models") or [])
         return 200,{"ok":True,"provider":pid,"provider_name":provider["name"],"models":models,"free":True,"key_optional":True}
     try:
+        base=provider_base_url(provider)
         if provider["kind"]=="gemini":
-            url=provider["base_url"]+"/models?key="+quote(key,safe="")
+            url=base+"/models?key="+quote(key,safe="")
             headers={"Accept":"application/json"}
         elif provider["kind"]=="anthropic":
-            url=provider["base_url"]+"/models?limit=1000"
+            url=base+"/models?limit=1000"
             headers={"x-api-key":key,"anthropic-version":"2023-06-01","Accept":"application/json"}
         else:
-            url=provider["base_url"].rstrip("/")+"/models"
+            url=base.rstrip("/")+"/models"
             headers={"Authorization":"Bearer "+key,"Accept":"application/json"}
         req=Request(url,headers=headers,method="GET")
         with urlopen(req,timeout=25) as response:
@@ -607,6 +632,7 @@ def provider_chat(data, emit=None, cancel=None):
     if not provider: return 400,{"ok":False,"error":"Unknown provider","providers":list(PROVIDERS)}
     key_data=readj(KEYS/(provider["key"]+".json"),{})
     api_key=str(data.get("test_api_key") or key_data.get("value","")).strip()
+    if provider.get("account_key") and not provider_account_id(provider): return 428,{"ok":False,"error":"missing_account_id","provider":pid,"provider_name":provider["name"],"credential_name":provider["account_key"],"message":"The Cloudflare Account ID is not configured. Ask the user for it and store it in the local Termux vault before retrying."}
     if not api_key and not provider.get("key_optional"): return 428,{"ok":False,"error":"missing_api_key","provider":pid,"provider_name":provider["name"],"credential_name":provider["key"],"message":"API key is not configured. Ask the user to provide it in this chat; store it in the local Termux vault before retrying."}
     model=str(data.get("model") or provider["default_model"]).strip()
     messages=data.get("messages") or []
@@ -638,7 +664,7 @@ def provider_chat(data, emit=None, cancel=None):
                 contents.append({"role":"user","parts":[{"functionResponse":{"name":str(pending_call.get("name","termux_exec")),"response":{"result":resume.get("result") or {}}}}]})
             function_declarations=[{"name":tool["name"],"description":tool["description"],"parameters":gemini_schema(tool.get("inputSchema"))} for tool in tool_catalog]
             method=":streamGenerateContent?alt=sse&key=" if emit else ":generateContent?key="
-            url=provider["base_url"]+"/models/"+quote(model,safe="")+method+quote(api_key,safe="")
+            url=provider_base_url(provider)+"/models/"+quote(model,safe="")+method+quote(api_key,safe="")
             headers={"Content-Type":"application/json"}
             for attempt in range(9):
                 if cancel: cancel.check()
@@ -692,7 +718,7 @@ def provider_chat(data, emit=None, cancel=None):
                 pending_call=resume.get("call") or {}
                 msgs.append({"role":"user","content":[{"type":"tool_result","tool_use_id":str(pending_call.get("id","")),"content":json.dumps(resume.get("result") or {},ensure_ascii=False)}]})
             tools=[{"name":tool["name"],"description":tool["description"],"input_schema":tool["inputSchema"]} for tool in tool_catalog]
-            url=provider["base_url"]+"/messages"
+            url=provider_base_url(provider)+"/messages"
             headers={"Content-Type":"application/json","x-api-key":api_key,"anthropic-version":"2023-06-01"}
             for attempt in range(9):
                 if cancel: cancel.check()
@@ -739,9 +765,10 @@ def provider_chat(data, emit=None, cancel=None):
                 pending_call=resume.get("call") or {}
                 msgs.append({"role":"tool","tool_call_id":str(pending_call.get("id","")),"content":json.dumps(resume.get("result") or {},ensure_ascii=False)})
             tools=[{"type":"function","function":{"name":tool["name"],"description":tool["description"],"parameters":tool["inputSchema"]}} for tool in tool_catalog]
-            url=provider["base_url"].rstrip("/")+"/chat/completions"
+            url=provider_base_url(provider).rstrip("/")+"/chat/completions"
             headers={"Content-Type":"application/json"}
             if api_key: headers["Authorization"]="Bearer "+api_key
+            if pid=="pollinations": headers["Referer"]="https://github.com/aishervin/codein"
             for attempt in range(9):
                 if cancel: cancel.check()
                 if emit and time.monotonic()>deadline:

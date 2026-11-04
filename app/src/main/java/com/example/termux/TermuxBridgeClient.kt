@@ -17,7 +17,7 @@ import java.util.UUID
  * Client for the user's own Termux Agent Room.
  * The endpoint and bearer token are stored locally on this device.
  */
-data class TermuxProvider(val id: String, val name: String, val defaultModel: String, val models: List<String>, val configured: Boolean, val credentialName: String)
+data class TermuxProvider(val id: String, val name: String, val defaultModel: String, val models: List<String>, val configured: Boolean, val credentialName: String, val accountCredential: String = "", val keyOptional: Boolean = false)
 class MissingProviderCredential(val credentialName: String, val providerName: String) : IllegalStateException("Missing API key for $providerName")
 
 class TermuxBridgeClient(context: Context) {
@@ -110,7 +110,9 @@ class TermuxBridgeClient(context: Context) {
                 defaultModel = item.optString("default_model"),
                 models = (0 until modelsJson.length()).map { modelsJson.optString(it) },
                 configured = item.optBoolean("configured"),
-                credentialName = item.optString("credential_name")
+                credentialName = item.optString("credential_name"),
+                accountCredential = item.optString("account_credential"),
+                keyOptional = item.optBoolean("key_optional")
             )
         }
     }
@@ -125,7 +127,6 @@ class TermuxBridgeClient(context: Context) {
     /** Query the provider's live model endpoint using the entered key without saving or logging it. */
     suspend fun discoverModels(provider: String, apiKey: String): List<String> {
         require(provider.isNotBlank()) { "Select an AI provider first" }
-        require(apiKey.isNotBlank()) { "Enter the provider API key first" }
         val result = mcpTool("provider_models_list", JSONObject()
             .put("provider", provider)
             .put("api_key", apiKey), 45)
