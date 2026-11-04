@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Codein local Termux bridge. Python standard library only."""
-import hashlib, json, os, random, signal, subprocess, threading, time, uuid
+import hashlib, json, os, random, shutil, signal, subprocess, threading, time, uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +32,8 @@ PENDING_ROOT=RUNS_ROOT/"pending"
 PENDING_APPROVAL_TTL=int(CONFIG.get("approval_ttl_seconds",86400))
 RUNS_ROOT.mkdir(parents=True,exist_ok=True)
 PENDING_ROOT.mkdir(parents=True,exist_ok=True)
+RUNS_ROOT.chmod(0o700)
+PENDING_ROOT.chmod(0o700)
 RUNS_LOCK=threading.RLock()
 RUN_CONTROLS={}
 RUN_PROCESSES={}
@@ -385,8 +387,10 @@ def dispatch_mcp_tool(name, args):
             _,stderr_tail,stderr_size=head_tail(stderr_path,0,8000)
             full_log=log_dir/(command_id+".log")
             with full_log.open("wb") as log:
-                log.write(b"=== STDOUT ===\\n"); log.write(stdout_path.read_bytes())
-                log.write(b"\\n=== STDERR ===\\n"); log.write(stderr_path.read_bytes())
+                log.write(b"=== STDOUT ===\\n")
+                with stdout_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
+                log.write(b"\\n=== STDERR ===\\n")
+                with stderr_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
             result={"exit_code":exit_code,"stdout":stdout_tail,"stderr":stderr_tail,"stdout_head":stdout_head,"stdout_tail":stdout_tail,"stderr_tail":stderr_tail,"truncated":stdout_size>20000 or stderr_size>8000,"full_log_path":str(full_log),"duration_ms":int((time.monotonic()-start)*1000)}
             if timed_out: result["error"]="Command timed out"
         event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
