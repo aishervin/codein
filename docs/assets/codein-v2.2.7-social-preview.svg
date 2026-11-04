@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Codein 2.2.7 Android release</title>
+  <desc id="desc">An editorial release card for Codein, featuring a local Termux bridge, model routing, and browser tools.</desc>
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F6F0E3"/>
+      <stop offset="1" stop-color="#E9E1CF"/>
+    </linearGradient>
+    <linearGradient id="night" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#142223"/>
+      <stop offset="1" stop-color="#0A1112"/>
+    </linearGradient>
+    <linearGradient id="flare" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF8657"/>
+      <stop offset="1" stop-color="#F04C2F"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop offset="0" stop-color="#D3F05B" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#D3F05B" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="microgrid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" fill="none" stroke="#D6E2CA" stroke-opacity="0.07" stroke-width="1"/>
+    </pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="22" stdDeviation="18" flood-color="#111919" flood-opacity="0.24"/>
+    </filter>
+    <clipPath id="card">
+      <rect width="1280" height="640" rx="26"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="1280" height="640" fill="url(#paper)"/>
+    <path d="M745 0H1280V640H678C767 505 793 206 745 0Z" fill="url(#night)"/>
+    <path d="M745 0H1280V640H678C767 505 793 206 745 0Z" fill="url(#microgrid)"/>
+    <ellipse cx="1040" cy="315" rx="310" ry="300" fill="url(#halo)"/>
+
+    <g font-family="Arial, Helvetica, sans-serif">
+      <rect x="72" y="64" width="38" height="38" rx="11" fill="#152526"/>
+      <path d="M96 75H86L79 83L86 91H96" fill="none" stroke="#D3F05B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="100" cy="83" r="2.5" fill="#F36A46"/>
+      <text x="124" y="81" fill="#263334" font-size="14" font-weight="700" letter-spacing="2.3">CODEIN / ANDROID WORKSPACE</text>
+      <text x="124" y="101" fill="#7A7E70" font-family="monospace" font-size="10" letter-spacing="1.6">LOCAL-FIRST TOOLS FOR YOUR NEXT MOVE</text>
+
+      <rect x="74" y="164" width="221" height="34" rx="17" fill="#E0D7C3"/>
+      <circle cx="93" cy="181" r="4" fill="#F05A39"/>
+      <text x="108" y="186" fill="#3B4542" font-family="monospace" font-size="12" font-weight="700" letter-spacing="1.4">ANDROID RELEASE / 2.2.7</text>
+
+      <text x="69" y="302" fill="#152324" font-size="112" font-weight="800" letter-spacing="-5">Codein</text>
+      <path d="M78 329H275" stroke="#F05A39" stroke-width="5"/>
+      <text x="77" y="376" fill="#F05A39" font-family="monospace" font-size="30" font-weight="700" letter-spacing="1.5">VERSION 2.2.7</text>
+      <text x="77" y="427" fill="#233433" font-size="25" font-weight="600">Android, with a local edge.</text>
+      <text x="79" y="462" fill="#6D746D" font-size="16">Termux bridge, model routing, and browser tools.</text>
+
+      <g font-family="monospace" font-size="11" font-weight="700" letter-spacing="1.1">
+        <rect x="77" y="508" width="137" height="36" rx="18" fill="#D3F05B"/>
+        <text x="94" y="531" fill="#1C2A27">LOCAL BRIDGE</text>
+        <rect x="224" y="508" width="141" height="36" rx="18" fill="#152526"/>
+        <text x="242" y="531" fill="#F6F0E3">MODEL ROUTING</text>
+        <rect x="375" y="508" width="147" height="36" rx="18" fill="#F05A39"/>
+        <text x="394" y="531" fill="#FFF8EC">BROWSER TOOLS</text>
+      </g>
+      <path d="M77 576H585" stroke="#C8BEAA" stroke-width="1"/>
+      <text x="78" y="603" fill="#7E8176" font-family="monospace" font-size="10" letter-spacing="1.7">BUILT FOR ANDROID  /  READY TO CONNECT</text>
+    </g>
+
+    <g fill="none" stroke="#CFEA58" stroke-opacity="0.35">
+      <circle cx="1040" cy="327" r="236" stroke-width="1"/>
+      <circle cx="1040" cy="327" r="266" stroke-width="1" stroke-dasharray="2 10"/>
+      <path d="M770 327H837L865 299H895M1184 327H1248M1040 66V126M1040 528V591"/>
+    </g>
+    <circle cx="1208" cy="327" r="5" fill="#D3F05B"/>
+    <circle cx="865" cy="299" r="5" fill="#F05A39"/>
+    <circle cx="1040" cy="126" r="5" fill="#D3F05B"/>
+
+    <g font-family="monospace">
+      <text x="817" y="83" fill="#DBE3D1" font-size="11" letter-spacing="2.2">RELEASE / 04 NOV 2026</text>
+      <text x="1198" y="83" fill="#8A9B8D" font-size="10" text-anchor="end" letter-spacing="1.4">V2.2.7</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="816" y="176" width="382" height="286" rx="22" fill="#F6F0E3"/>
+      <path d="M838 176H1176A22 22 0 0 1 1198 198V219H816V198A22 22 0 0 1 838 176Z" fill="#E4DDCD"/>
+      <circle cx="844" cy="198" r="5" fill="#F05A39"/>
+      <circle cx="862" cy="198" r="5" fill="#D3F05B"/>
+      <circle cx="880" cy="198" r="5" fill="#9AA99D"/>
+      <text x="1007" y="202" text-anchor="middle" fill="#6B746C" font-family="monospace" font-size="10" letter-spacing="1.2">CODEIN / LIVE SESSION</text>
+
+      <text x="847" y="260" fill="#79837A" font-family="monospace" font-size="11">01</text>
+      <text x="881" y="260" fill="#263633" font-family="monospace" font-size="14">termux bridge</text>
+      <text x="1162" y="260" text-anchor="end" fill="#477D4A" font-family="monospace" font-size="10" font-weight="700">CONNECTED</text>
+      <path d="M847 277H1168" stroke="#D8D1C0"/>
+
+      <text x="847" y="315" fill="#79837A" font-family="monospace" font-size="11">02</text>
+      <text x="881" y="315" fill="#263633" font-family="monospace" font-size="14">choose a model</text>
+      <text x="1162" y="315" text-anchor="end" fill="#477D4A" font-family="monospace" font-size="10" font-weight="700">VERIFIED</text>
+      <path d="M847 332H1168" stroke="#D8D1C0"/>
+
+      <text x="847" y="370" fill="#79837A" font-family="monospace" font-size="11">03</text>
+      <text x="881" y="370" fill="#263633" font-family="monospace" font-size="14">open the browser</text>
+      <text x="1162" y="370" text-anchor="end" fill="#F05A39" font-family="monospace" font-size="10" font-weight="700">IN CONTROL</text>
+
+      <rect x="843" y="405" width="328" height="36" rx="10" fill="#152526"/>
+      <text x="860" y="428" fill="#D3F05B" font-family="monospace" font-size="12">&gt; ready for the next task</text>
+      <rect x="1149" y="416" width="8" height="15" rx="2" fill="#F05A39"/>
+    </g>
+
+    <text x="820" y="526" fill="#DCE3D4" font-family="monospace" font-size="10" letter-spacing="1.8">LOCAL BRIDGE</text>
+    <path d="M925 522H949" stroke="#F05A39" stroke-width="2"/>
+    <text x="959" y="526" fill="#DCE3D4" font-family="monospace" font-size="10" letter-spacing="1.8">HUMAN APPROVAL</text>
+    <text x="1195" y="595" text-anchor="end" fill="#74817A" font-family="monospace" font-size="10" letter-spacing="1.6">A FIELD NOTE FROM CODEIN</text>
+  </g>
+</svg>
