@@ -367,9 +367,9 @@ class McpTransportTests(unittest.TestCase):
 
     def test_provider_503_is_reported_as_transient_without_raw_json(self):
         body=json.dumps({"error":{"code":503,"message":"This model is currently experiencing high demand."}}).encode()
-        error=HTTPError("https://provider.invalid/generate",503,"busy",{"Retry-After":"0"},io.BytesIO(body))
+        errors=[HTTPError("https://provider.invalid/generate",503,"busy",{"Retry-After":"0"},io.BytesIO(body)) for _ in range(5)]
         with patch.object(mcp_server,"readj",return_value={"value":"test-api-key"}), \
-                patch.object(mcp_server,"urlopen",side_effect=[error,error,error,error,error]):
+                patch.object(mcp_server,"urlopen",side_effect=errors):
             status,result=mcp_server.provider_chat({"provider":"gemini","model":"test-model","messages":[{"role":"user","content":"hello"}]})
         self.assertEqual(status,502)
         self.assertEqual(result["error"],"Provider is temporarily busy (HTTP 503)")
