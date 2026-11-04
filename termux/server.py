@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Codein local Termux bridge. Python standard library only."""
-import hashlib, json, os, random, shutil, signal, subprocess, threading, time, uuid
+import hashlib, json, os, random, re, shutil, signal, subprocess, threading, time, uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -999,10 +999,24 @@ def write_run_meta(run_id,meta):
     tmp.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     tmp.chmod(0o600); os.replace(tmp,path)
 
+
+def redact_sensitive(value):
+    if isinstance(value,dict): return {key:redact_sensitive(item) for key,item in value.items()}
+    if isinstance(value,list): return [redact_sensitive(item) for item in value]
+    if not isinstance(value,str): return value
+    patterns=(
+        (r"(?i)(authorization\\s*[:=]\\s*bearer\\s+)[^\\s\"',;]+",r"\\1[REDACTED]"),
+        (r"(?i)(\\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\\b\\s*[:=]\\s*)[^\\s\"',;]+",r"\\1[REDACTED]"),
+        (r"(?i)(x-api-key\\s*:\\s*)[^\\s\"',;]+",r"\\1[REDACTED]"),
+        (r"(?i)(--(?:token|api-key|password|secret)\\s+)[^\\s]+",r"\\1[REDACTED]"),
+    )
+    for pattern,replacement in patterns: value=re.sub(pattern,replacement,value)
+    return value
+
 def append_run_event(run_id,payload):
     with RUNS_LOCK:
         directory=run_dir(run_id); meta=readj(directory/"meta.json",{})
-        seq=int(meta.get("last_seq",0))+1; item={"seq":seq,"at":now(),**payload}
+        seq=int(meta.get("last_seq",0))+1; item=redact_sensitive({"seq":seq,"at":now(),**payload})
         with (directory/"events.jsonl").open("a",encoding="utf-8") as stream:
             stream.write(json.dumps(item,ensure_ascii=False,separators=(",",":"))+"\n"); stream.flush(); os.fsync(stream.fileno())
         meta["last_seq"]=seq; meta["updated_at"]=now(); write_run_meta(run_id,meta)
