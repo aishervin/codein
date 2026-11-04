@@ -393,8 +393,11 @@ def dispatch_mcp_tool(name, args):
                 with stderr_path.open("rb") as source: shutil.copyfileobj(source,log,1024*1024)
             result={"exit_code":exit_code,"stdout":stdout_tail,"stderr":stderr_tail,"stdout_head":stdout_head,"stdout_tail":stdout_tail,"stderr_tail":stderr_tail,"truncated":stdout_size>20000 or stderr_size>8000,"full_log_path":str(full_log),"duration_ms":int((time.monotonic()-start)*1000)}
             if timed_out: result["error"]="Command timed out"
-        event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
-        return redact_sensitive(result)
+            event("command_finished",{"exit_code":result["exit_code"],"duration_ms":result["duration_ms"]})
+            return redact_sensitive(result)
+        except Exception as exc:
+            event("command_failed",{"error":str(exc)[:500],"duration_ms":int((time.monotonic()-start)*1000)})
+            return {"exit_code":1,"error":str(exc)[:1000],"duration_ms":int((time.monotonic()-start)*1000)}
     if name=="agent_room_get":
         journal=EVENTS/"journal.jsonl"
         lines=journal.read_text(encoding="utf-8").splitlines()[-25:] if journal.exists() else []
