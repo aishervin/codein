@@ -52,7 +52,7 @@ def stash_pending_chat(pid, model, system, kind, native, call, timeout):
         PENDING_CHATS[continuation_id]=state
         path=PENDING_ROOT/(continuation_id+".json")
         tmp=path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state,ensure_ascii=False)+"\n",encoding="utf-8")
+        tmp.write_text(json.dumps(redact_sensitive(state),ensure_ascii=False)+"\n",encoding="utf-8")
         tmp.chmod(0o600); os.replace(tmp,path)
     return continuation_id
 
@@ -1027,7 +1027,7 @@ def read_run_meta(run_id): return readj(run_dir(run_id)/"meta.json",{})
 
 def write_run_meta(run_id,meta):
     path=run_dir(run_id)/"meta.json"; tmp=path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    tmp.write_text(json.dumps(redact_sensitive(meta),ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     tmp.chmod(0o600); os.replace(tmp,path)
 
 
