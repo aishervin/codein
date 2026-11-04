@@ -1090,7 +1090,7 @@ def start_agent_run(arguments):
     run_id=uuid.uuid4().hex; directory=RUNS_ROOT/run_id; directory.mkdir(mode=0o700)
     meta={"run_id":run_id,"status":"RUNNING","provider":str(args.get("provider","")),"model":str(args.get("model","")),"created_at":now(),"updated_at":now(),"last_seq":0,"pending_approval":None}
     write_run_meta(run_id,meta)
-    (directory/"messages.json").write_text(json.dumps(redact_sensitive({"request":args,"native_history":args.get("messages",[])},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    (directory/"messages.json").write_text(json.dumps(redact_sensitive({"request":args,"native_history":args.get("messages",[])}),ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     (directory/"messages.json").chmod(0o600)
     control=DurableRunControl(); RUN_CONTROLS[run_id]=control
     append_run_event(run_id,{"type":"status","status":"RUNNING"})
